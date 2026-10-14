@@ -1,0 +1,32 @@
+# Documentación de trabajo e instrucciones para agentes: solo en local
+docs/
+CLAUDE.md
+
+# Dependencias y compilados
+node_modules/
+out/
+build/
+helper/.build/
+*.tsbuildinfo
+
+# Modelos descargados
+models/
+*.bin
+*.gguf
+*.ggml
+
+# Claves, certificados y entorno
+.env
+.env.*
+!.env.example
+*.p12
+*.pem
+*.key
+*.cer
+*.keychain
+*.keychain-db
+secrets/
+
+# Sistema y registros
+.DS_Store
+*.log
