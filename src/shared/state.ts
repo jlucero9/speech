@@ -2,6 +2,7 @@
 // una copia completa en cada cambio (es pequeño). Las ventanas no lo modifican
 // directamente: piden acciones por IPC (ver ipc.ts).
 
+import type { FnUsage } from './helper-protocol';
 import type { Preferences } from './preferences';
 
 export type HelperStatus =
@@ -35,12 +36,71 @@ export interface DataState {
   error: string | null;
 }
 
+/** 'unknown': el helper no está en marcha o aún no ha contestado. */
+export type TapState = 'active' | 'no-permission' | 'failed' | 'unknown';
+
+export interface SecureInputOwner {
+  pid: number;
+  appName: string | null;
+  bundleId: string | null;
+  since: number;
+}
+
+export interface KeyboardState {
+  tap: TapState;
+  /** Motivo del último cambio del tap, para el registro y la ventana. */
+  tapReason: string | null;
+  /** Monitorización de entrada. Solo se pide si el tap no se puede crear sin ella. */
+  inputMonitoring: 'granted' | 'denied' | 'unknown';
+  /** App que tiene la entrada segura activa y bloquea el atajo, o null. */
+  secureInput: SecureInputOwner | null;
+  fnUsage: FnUsage;
+}
+
+// Estados del dictado. «initializing»: abriendo el micrófono; «stopping»:
+// esperando los últimos trozos; «processing»: guardando (y, más adelante,
+// transcribiendo). Cancelar vuelve directamente a «idle».
+export type DictationStatus = 'idle' | 'initializing' | 'listening' | 'stopping' | 'processing';
+
+export type DictationOutcome =
+  | 'saved' // terminó y su audio se guardó
+  | 'cancelled' // cancelado por el usuario (el audio se guarda si dura ≥ 0,5 s)
+  | 'discarded' // descartado sin audio útil: toque corto, otra combinación…
+  | 'failed'; // no pudo arrancar o se perdió por un fallo
+
+export interface DictationResult {
+  id: string;
+  outcome: DictationOutcome;
+  /** Motivo en clave (`debounce_ptt`, `user_action_escape`, `no_audio`…). */
+  reason: string;
+  /** Texto para la ventana, en inglés. */
+  message: string;
+  durationMs: number;
+  file: string | null;
+  at: number;
+}
+
+export interface DictationState {
+  status: DictationStatus;
+  id: string | null;
+  startedAt: number | null;
+  /** Manos libres (doble pulsación): no hace falta mantener la tecla. */
+  handsFree: boolean;
+  /** Nivel de entrada de 0 a 1, cada 150 ms mientras escucha. */
+  level: number;
+  /** Todas las muestras a cero durante 5 s: el micrófono no da señal. */
+  micSilent: boolean;
+  last: DictationResult | null;
+}
+
 export interface SharedState {
   helper: HelperState;
   permissions: {
     accessibility: AccessibilityPermission;
     microphone: MicrophonePermission;
   };
+  keyboard: KeyboardState;
+  dictation: DictationState;
   data: DataState;
   prefs: Preferences;
 }

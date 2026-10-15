@@ -21,5 +21,6 @@ const comun = {
 };
 await esbuild({ ...comun, entryPoints: [join(raiz, 'src/main/index.ts')], outfile: join(out, 'main/index.js') });
 await esbuild({ ...comun, entryPoints: [join(raiz, 'src/preload/index.ts')], outfile: join(out, 'preload/index.js') });
+await esbuild({ ...comun, entryPoints: [join(raiz, 'src/preload/recorder.ts')], outfile: join(out, 'preload/recorder.js') });
 await vite({ configFile: join(raiz, 'vite.config.mts'), logLevel: 'warn' });
 console.log('Compilado en out/');

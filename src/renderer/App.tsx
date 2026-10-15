@@ -25,6 +25,14 @@ function Panels({ state }: { state: SharedState }) {
       <Section title="Permissions">
         <AccessibilityRow state={state} />
         <MicrophoneRow state={state} />
+        <InputMonitoringRow state={state} />
+      </Section>
+      <Section title="Dictation">
+        <ShortcutRow state={state} />
+        <SecureInputRow state={state} />
+        <GlobeKeyRow state={state} />
+        <DictationRow state={state} />
+        <LastDictationRow state={state} />
       </Section>
       <Section title="System">
         <HelperRow state={state} />
@@ -107,6 +115,140 @@ function MicrophoneRow({ state }: { state: SharedState }) {
         </>
       }
     />
+  );
+}
+
+// Solo aparece si el tap no se puede crear y falta Monitorización de entrada.
+function InputMonitoringRow({ state }: { state: SharedState }) {
+  const k = state.keyboard;
+  if (k.tap !== 'failed' || k.inputMonitoring !== 'denied') return null;
+  return (
+    <Row
+      label="Input Monitoring"
+      description="Needed to notice your shortcut while you work in other apps."
+      status={
+        <>
+          <Badge tone="warn">Not allowed</Badge>
+          <Button onClick={() => window.speech.requestInputMonitoring()}>Allow…</Button>
+          <Button variant="secondary" onClick={() => window.speech.openInputMonitoringSettings()}>
+            Open System Settings
+          </Button>
+        </>
+      }
+    />
+  );
+}
+
+function ShortcutRow({ state }: { state: SharedState }) {
+  const k = state.keyboard;
+  const status =
+    k.tap === 'active' ? (
+      <Badge tone="ok">Active</Badge>
+    ) : k.tap === 'no-permission' ? (
+      <Badge tone="warn">Needs Accessibility</Badge>
+    ) : k.tap === 'failed' ? (
+      <Badge tone="error">Not working</Badge>
+    ) : (
+      <Badge tone="muted">Checking…</Badge>
+    );
+  const description =
+    k.tap === 'failed'
+      ? 'macOS refused to let Speech watch the keyboard. Check the permissions above.'
+      : 'Hold fn and speak, then release. Press fn twice quickly for hands-free. Esc cancels.';
+  return <Row label="Shortcut" description={description} status={status} />;
+}
+
+function SecureInputRow({ state }: { state: SharedState }) {
+  const owner = state.keyboard.secureInput;
+  if (!owner) return null;
+  return (
+    <Row
+      label="Shortcut blocked"
+      description={`${owner.appName ?? 'Another app'} has secure input on, usually for a password field. Your shortcut works again when you leave that field or quit the app.`}
+      status={<Badge tone="warn">Secure input</Badge>}
+    />
+  );
+}
+
+function GlobeKeyRow({ state }: { state: SharedState }) {
+  const usage = state.keyboard.fnUsage;
+  if (usage === 'nothing' || usage === 'unknown') return null;
+  const what = {
+    'input-source': 'switches the input source',
+    emoji: 'opens Emoji & Symbols',
+    dictation: 'starts macOS Dictation when you press it twice',
+  }[usage];
+  return (
+    <Row
+      label="Globe key"
+      description={`When you press fn, macOS also ${what}. To avoid it, set “Press 🌐 key to” to “Do Nothing” in Keyboard settings.`}
+      status={
+        <Button variant="secondary" onClick={() => window.speech.openKeyboardSettings()}>
+          Open Keyboard Settings
+        </Button>
+      }
+    />
+  );
+}
+
+function DictationRow({ state }: { state: SharedState }) {
+  const d = state.dictation;
+  const label = {
+    idle: 'Ready',
+    initializing: 'Starting…',
+    listening: d.handsFree ? 'Listening · hands-free' : 'Listening',
+    stopping: 'Finishing…',
+    processing: 'Saving…',
+  }[d.status];
+  const description = d.micSilent
+    ? 'No sound is coming from the microphone.'
+    : d.status === 'listening'
+      ? d.handsFree
+        ? 'Press fn again to stop. Esc cancels.'
+        : 'Release fn to stop. Esc cancels.'
+      : 'Current state of dictation.';
+  return (
+    <Row
+      label="Status"
+      description={description}
+      status={
+        <>
+          {d.status === 'listening' && <LevelMeter level={d.level} />}
+          <Badge tone={d.status === 'idle' ? 'muted' : d.micSilent ? 'warn' : 'ok'}>{label}</Badge>
+        </>
+      }
+    />
+  );
+}
+
+function LastDictationRow({ state }: { state: SharedState }) {
+  const last = state.dictation.last;
+  if (!last) return null;
+  const tone = last.outcome === 'saved' ? 'ok' : last.outcome === 'failed' ? 'error' : 'muted';
+  const badge = { saved: 'Saved', cancelled: 'Cancelled', discarded: 'Discarded', failed: 'Failed' }[last.outcome];
+  return (
+    <Row
+      label="Last dictation"
+      description={last.message}
+      status={
+        <>
+          <Badge tone={tone}>{badge}</Badge>
+          {last.file && (
+            <Button variant="secondary" onClick={() => window.speech.revealRecording()}>
+              Show in Finder
+            </Button>
+          )}
+        </>
+      }
+    />
+  );
+}
+
+function LevelMeter({ level }: { level: number }) {
+  return (
+    <span className="meter" role="meter" aria-label="Input level" aria-valuenow={level} aria-valuemin={0} aria-valuemax={1}>
+      <span className="meter-fill" style={{ width: `${Math.round(level * 100)}%` }} />
+    </span>
   );
 }
 

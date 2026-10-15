@@ -1,7 +1,11 @@
 import AppKit
 import ApplicationServices
 
-// Ciclo de vida y mensajes del helper. Todo corre en la cola principal.
+// Ciclo de vida y mensajes del helper. Todo corre en la cola principal salvo
+// el callback del event tap (Keyboard.swift), que tiene su hilo.
+//
+// El tap se crea en cuanto hay permiso de Accesibilidad y se quita si se
+// retira; la comprobación periódica lo vuelve a crear o a activar.
 //
 // Se cierra solo si:
 // - stdin llega a EOF (main cerró la tubería o murió);
@@ -9,17 +13,21 @@ import ApplicationServices
 // - pasan 15 s sin ningún mensaje de main.
 
 final class Helper {
-    static let protocolVersion = 1
+    static let protocolVersion = 2
     private static let orphanTimeout: TimeInterval = 15
     private static let accessibilityPollInterval: TimeInterval = 2
+    private static let tapRetryInterval: TimeInterval = 10
 
     private let launchedAt: Date
     private var ipc: IPC!
     private var lastMessageAt = Date()
     private var accessibilityTrusted = AXIsProcessTrusted()
+    private var lastTapAttempt = Date.distantPast
     private var timers: [DispatchSourceTimer] = []
     private var parentWatcher: DispatchSourceProcess?
     private var activity: NSObjectProtocol?
+    private let keyboard = Keyboard()
+    private let secureInput = SecureInputMonitor()
 
     init(launchedAt: Date) {
         self.launchedAt = launchedAt
@@ -37,9 +45,11 @@ final class Helper {
             onClose: { Helper.quit("main closed the connection") }
         )
         ipc.startReading()
+        setUpKeyboard()
         watchParent()
         startTimers()
         observeAccessibilityChanges()
+        observeWake()
         Log.info("Helper started: pid \(getpid()), responsibility disclaimed: \(Responsibility.isDisclaimed), accessibility: \(accessibilityTrusted)")
     }
 
@@ -54,6 +64,7 @@ final class Helper {
                 "protocolVersion": Helper.protocolVersion,
                 "launchMs": Int(Date().timeIntervalSince(launchedAt) * 1000),
                 "disclaimed": Responsibility.isDisclaimed,
+                "tap": keyboard.state.rawValue,
             ])
         case "GetAccessibilityStatus":
             ipc.respond(to: request.id, type: "AccessibilityStatus", payload: ["trusted": checkAccessibility()])
@@ -63,10 +74,90 @@ final class Helper {
             let trusted = AXIsProcessTrustedWithOptions(options)
             Log.info("Requested accessibility permission; trusted: \(trusted)")
             ipc.respond(to: request.id, type: "AccessibilityStatus", payload: ["trusted": trusted])
+        case "UpdateShortcuts":
+            let list = (request.payload["shortcuts"] as? [[String: Any]] ?? []).compactMap { item -> Shortcut? in
+                guard let action = item["action"] as? String, let keys = item["keys"] as? [Int], !keys.isEmpty else {
+                    Log.warn("Skipping unparseable shortcut \(item)")
+                    return nil
+                }
+                let set = Set(keys)
+                return Shortcut(action: action, keys: set, hasModifier: set.contains { Keyboard.isModifier($0) })
+            }
+            keyboard.setShortcuts(list)
+            ipc.respond(to: request.id, type: "OK")
+        case "SetDictationActive":
+            keyboard.setDictationActive(request.payload["active"] as? Bool ?? false)
+            ipc.respond(to: request.id, type: "OK")
+        case "CheckStaleKeys":
+            let keys = request.payload["keys"] as? [Int] ?? []
+            let released = keyboard.releasedKeys(among: keys)
+            if !released.isEmpty { Log.info("Stale keys released: \(released)") }
+            ipc.respond(to: request.id, type: "StaleKeys", payload: ["released": released])
+        case "GetKeyboardStatus":
+            ipc.respond(to: request.id, type: "KeyboardStatus", payload: keyboardStatus())
+        case "RequestInputMonitoring":
+            // Muestra el diálogo del sistema si no hay permiso.
+            let granted = CGRequestListenEventAccess()
+            Log.info("Requested input monitoring permission; granted: \(granted)")
+            ipc.respond(to: request.id, type: "InputMonitoringStatus", payload: ["granted": granted])
         default:
             Log.warn("Unknown request type \(request.type)")
             ipc.respond(to: request.id, type: "Error", payload: ["message": "Unknown request type \(request.type)"])
         }
+    }
+
+    // MARK: Teclado
+
+    private func setUpKeyboard() {
+        keyboard.onKey = { [ipc] index, key, down, hidden in
+            ipc?.emit(event: "KeyEvent", payload: ["index": index, "key": key, "down": down, "hidden": hidden])
+        }
+        keyboard.onTapStatus = { [weak self] state, reason in
+            guard let self else { return }
+            self.ipc.emit(event: "TapStatus", payload: [
+                "state": state.rawValue,
+                "reason": reason,
+                "listenAccess": CGPreflightListenEventAccess(),
+            ])
+        }
+        secureInput.onChange = { [weak self] _, _ in
+            guard let self else { return }
+            self.ipc.emit(event: "SecureInputStatus", payload: self.secureInput.payload)
+        }
+        syncTap()
+        secureInput.poll()
+    }
+
+    /// Crea o quita el tap según el permiso, y lo reactiva si el sistema lo apagó.
+    private func syncTap() {
+        if accessibilityTrusted {
+            if keyboard.isRunning {
+                keyboard.watchdog()
+            } else if keyboard.state != .failed || Date().timeIntervalSince(lastTapAttempt) >= Helper.tapRetryInterval {
+                lastTapAttempt = Date()
+                keyboard.start()
+            }
+        } else if keyboard.isRunning || keyboard.state != .noPermission {
+            keyboard.stop(state: .noPermission, reason: "accessibility permission not granted")
+        }
+    }
+
+    private func keyboardStatus() -> [String: Any] {
+        [
+            "tap": keyboard.state.rawValue,
+            "reason": keyboard.stateReason,
+            "listenAccess": CGPreflightListenEventAccess(),
+            "secureInput": secureInput.payload,
+            "fnUsage": FnUsage.current(),
+        ]
+    }
+
+    private func observeWake() {
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in self?.keyboard.noteWake() }
     }
 
     // MARK: Accesibilidad
@@ -79,6 +170,7 @@ final class Helper {
             accessibilityTrusted = trusted
             Log.info("Accessibility permission changed: \(trusted)")
             ipc.emit(event: "AccessibilityStatusChanged", payload: ["trusted": trusted])
+            syncTap()
         }
         return trusted
     }
@@ -117,6 +209,10 @@ final class Helper {
         }
         addTimer(every: Helper.accessibilityPollInterval) { [weak self] in
             self?.checkAccessibility()
+            self?.syncTap()
+        }
+        addTimer(every: SecureInputMonitor.pollInterval) { [weak self] in
+            self?.secureInput.poll()
         }
     }
 
@@ -128,10 +224,10 @@ final class Helper {
         timers.append(timer)
     }
 
-    static func quit(_ reason: String) -> Never {
+    static func quit(_ reason: String, code: Int32 = 0) -> Never {
         Log.info("Helper exiting: \(reason)")
         // Dar tiempo a que salga la línea de registro.
         usleep(50_000)
-        exit(0)
+        exit(code)
     }
 }

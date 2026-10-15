@@ -13,5 +13,12 @@ export default defineConfig({
     target: 'chrome140',
     // Las fuentes se sirven como ficheros, no incrustadas en el CSS.
     assetsInlineLimit: 0,
+    rollupOptions: {
+      input: {
+        hub: resolve(import.meta.dirname, 'src/renderer/index.html'),
+        // Ventana oculta de grabación: sin React.
+        recorder: resolve(import.meta.dirname, 'src/renderer/recorder/index.html'),
+      },
+    },
   },
 });

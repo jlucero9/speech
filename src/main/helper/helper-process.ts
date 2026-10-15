@@ -217,7 +217,9 @@ export class HelperProcess extends EventEmitter<HelperProcessEvents> {
       clearTimeout(p.timer);
       p.resolve(msg);
     } else if (msg.kind === 'event') {
-      this.emit('event', { type: msg.type, payload: msg.payload });
+      // Se quita solo `kind`: así TypeScript conserva la relación entre tipo y datos.
+      const { kind: _kind, ...event } = msg;
+      this.emit('event', event);
     }
   }
 

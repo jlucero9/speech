@@ -243,3 +243,19 @@ html {
 .switch-on .switch-thumb {
   transform: translateX(17px);
 }
+
+.meter {
+  display: block;
+  width: 64px;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--background-secondary);
+  overflow: hidden;
+}
+
+.meter-fill {
+  display: block;
+  height: 100%;
+  background: var(--success-fg);
+  transition: width 120ms linear;
+}

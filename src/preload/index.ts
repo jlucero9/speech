@@ -14,6 +14,10 @@ const api: SpeechApi = {
   requestMicrophone: () => ipcRenderer.invoke(IPC.requestMicrophone),
   openAccessibilitySettings: () => ipcRenderer.invoke(IPC.openAccessibilitySettings),
   retryHelper: () => ipcRenderer.invoke(IPC.retryHelper),
+  requestInputMonitoring: () => ipcRenderer.invoke(IPC.requestInputMonitoring),
+  openInputMonitoringSettings: () => ipcRenderer.invoke(IPC.openInputMonitoringSettings),
+  openKeyboardSettings: () => ipcRenderer.invoke(IPC.openKeyboardSettings),
+  revealRecording: () => ipcRenderer.invoke(IPC.revealRecording),
 };
 
 contextBridge.exposeInMainWorld('speech', api);

@@ -1,22 +1,31 @@
-import { app, ipcMain, powerMonitor } from 'electron';
+import { app, ipcMain, powerMonitor, shell } from 'electron';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { IPC } from '../shared/ipc';
 import { isValidPreference, type Preferences } from '../shared/preferences';
+import { DEFAULT_SHORTCUTS } from '../shared/shortcuts';
 import { openDatabase } from './db';
+import { Dictation } from './dictation/dictation';
+import { ShortcutListener } from './dictation/shortcuts';
 import { HelperProcess } from './helper/helper-process';
 import { openHub } from './hub-window';
+import { appPids, KeyboardStatus } from './keyboard-status';
 import { logger } from './log';
 import { helperExecutable } from './paths';
 import { Permissions } from './permissions';
 import { loadPreferences, savePreferences } from './preferences';
+import { RecorderWindow } from './recorder-window';
 import { initialState, Store } from './store';
-import { createTray } from './tray';
+import { createTray, setTrayWarning } from './tray';
 
 const log = logger('main');
 
 app.setName('Speech');
+// El servicio de audio de Chromium va por defecto en un proceso propio que,
+// una vez abierto el micrófono, ya no se cierra. Dentro de main ocupa mucho
+// menos y la captura solo se usa durante el dictado.
+app.commandLine.appendSwitch('disable-features', 'AudioServiceOutOfProcess');
 
 if (!app.requestSingleInstanceLock()) {
   // Ya hay una instancia: ella abre su ventana (evento second-instance).
@@ -62,11 +71,25 @@ function main(): void {
   helper.on('state', (h) => store.update((s) => ({ ...s, helper: h })));
   const permissions = new Permissions(store, helper);
   permissions.refreshMicrophone();
+  const keyboard = new KeyboardStatus(store, helper, appPids, () => DEFAULT_SHORTCUTS, (owner) =>
+    setTrayWarning(owner ? `Shortcut blocked by secure input in ${owner.appName ?? 'another app'}` : null),
+  );
+
+  // Atajo y dictado. La ventana de grabación vive siempre (oculta).
+  const recorder = new RecorderWindow();
+  recorder.installPermissionHandlers();
+  recorder.create();
+  const shortcuts = new ShortcutListener(helper, DEFAULT_SHORTCUTS);
+  const dictation = new Dictation(store, helper, recorder, permissions, shortcuts, join(dataDir, 'recordings'));
+
   helper.start();
   powerMonitor.on('resume', () => helper.noteResume());
 
   const showHub = (): void => {
-    openHub(() => permissions.refreshMicrophone());
+    openHub(() => {
+      permissions.refreshMicrophone();
+      void keyboard.refresh();
+    });
   };
   createTray(showHub);
   app.on('second-instance', showHub);
@@ -74,7 +97,10 @@ function main(): void {
   app.on('window-all-closed', () => {});
 
   // IPC
-  ipcMain.handle(IPC.getState, () => store.get());
+  ipcMain.handle(IPC.getState, (e) => {
+    store.addTarget(e.sender);
+    return store.get();
+  });
   ipcMain.handle(IPC.setPreference, (_e, key: keyof Preferences, value: unknown) => {
     if (!isValidPreference(key, value)) throw new Error(`Invalid preference ${String(key)}`);
     const next = { ...store.get().prefs, [key]: value };
@@ -86,16 +112,34 @@ function main(): void {
   ipcMain.handle(IPC.requestMicrophone, () => permissions.requestMicrophone());
   ipcMain.handle(IPC.openAccessibilitySettings, () => permissions.openAccessibilitySettings());
   ipcMain.handle(IPC.retryHelper, () => helper.retry());
+  ipcMain.handle(IPC.requestInputMonitoring, () => keyboard.requestInputMonitoring());
+  ipcMain.handle(IPC.openInputMonitoringSettings, () => keyboard.openInputMonitoringSettings());
+  ipcMain.handle(IPC.openKeyboardSettings, () => keyboard.openKeyboardSettings());
+  ipcMain.handle(IPC.revealRecording, () => {
+    const file = store.get().dictation.last?.file;
+    if (file) shell.showItemInFolder(file);
+  });
 
   app.on('before-quit', () => {
     log.info('Quitting');
     helper.stop();
+    recorder.shutdown();
     db?.close();
     db = null;
   });
 
   // Solo para comprobaciones desde el inspector de main (npm run start:debug).
   if (process.env.SPEECH_DEBUG === '1') {
-    (globalThis as Record<string, unknown>).speechDebug = { store, helper, permissions, showHub, dataDir };
+    (globalThis as Record<string, unknown>).speechDebug = {
+      store,
+      helper,
+      permissions,
+      keyboard,
+      recorder,
+      shortcuts,
+      dictation,
+      showHub,
+      dataDir,
+    };
   }
 }
