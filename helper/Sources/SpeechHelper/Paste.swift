@@ -142,7 +142,12 @@ final class Paster: NSObject, NSPasteboardItemDataProvider {
 
     /// Anota la app de delante y su elemento con foco con la clave `id`.
     func captureTarget(id: String) -> [String: Any] {
-        guard let app = NSWorkspace.shared.frontmostApplication else {
+        let workspace = NSWorkspace.shared.frontmostApplication
+        let live = Paster.frontPid()
+        if live != workspace?.processIdentifier {
+            Log.warn("Frontmost app: workspace says \(workspace?.localizedName ?? "none") (\(workspace?.processIdentifier ?? 0)), accessibility says pid \(live ?? 0)")
+        }
+        guard let app = live.flatMap({ NSRunningApplication(processIdentifier: $0) }) ?? workspace else {
             Log.warn("CaptureTarget: no frontmost app")
             return [:]
         }
@@ -467,6 +472,7 @@ final class Paster: NSObject, NSPasteboardItemDataProvider {
             var pid: pid_t = 0
             if AXUIElementGetPid(app, &pid) == .success { return pid }
         }
+        Log.warn("Accessibility did not say which app is in front; asking the workspace")
         return NSWorkspace.shared.frontmostApplication?.processIdentifier
     }
 

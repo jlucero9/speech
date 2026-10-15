@@ -43,6 +43,11 @@ interface Waiting {
 
 export class Paster {
   private waiting = new Map<string, Waiting>();
+  /**
+   * El último aviso. Hay que guardarlo: si el objeto se libera, Electron lo
+   * quita del Centro de notificaciones, a veces antes de que llegue a verse.
+   */
+  private notice: Notification | null = null;
 
   constructor(private readonly helper: HelperProcess) {
     helper.on('event', (e) => {
@@ -122,7 +127,9 @@ export class Paster {
 
   private notify(body: string): void {
     if (!Notification.isSupported()) return;
-    new Notification({ title: "Couldn't paste your dictation", body, silent: true }).show();
+    this.notice?.close();
+    this.notice = new Notification({ title: "Couldn't paste your dictation", body, silent: true });
+    this.notice.show();
   }
 }
 
