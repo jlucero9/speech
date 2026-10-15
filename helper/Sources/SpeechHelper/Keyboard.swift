@@ -266,6 +266,11 @@ final class Keyboard {
     // MARK: Callback (hilo del tap)
 
     fileprivate func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        // El ⌘V del pegado no es del usuario.
+        if type != .tapDisabledByTimeout, type != .tapDisabledByUserInput,
+           event.getIntegerValueField(.eventSourceUserData) == Paster.syntheticEventMarker {
+            return Unmanaged.passUnretained(event)
+        }
         switch type {
         case .tapDisabledByTimeout, .tapDisabledByUserInput:
             tapDisabled(byTimeout: type == .tapDisabledByTimeout)

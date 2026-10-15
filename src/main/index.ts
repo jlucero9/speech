@@ -8,6 +8,7 @@ import { DEFAULT_SHORTCUTS } from '../shared/shortcuts';
 import { DEFAULT_LOCAL_MODEL, type ModelState } from '../shared/transcription';
 import { openDatabase } from './db';
 import { Dictation } from './dictation/dictation';
+import { Paster } from './dictation/paste';
 import { ShortcutListener } from './dictation/shortcuts';
 import { HelperProcess } from './helper/helper-process';
 import { History } from './history';
@@ -113,6 +114,7 @@ function main(): void {
   recorder.installPermissionHandlers();
   recorder.create();
   const shortcuts = new ShortcutListener(helper, DEFAULT_SHORTCUTS);
+  const paster = new Paster(helper);
   const dictation = new Dictation(
     store,
     helper,
@@ -123,6 +125,7 @@ function main(): void {
     engine,
     history,
     vocabulary,
+    paster,
   );
 
   helper.start();
@@ -186,6 +189,7 @@ function main(): void {
       keyboard,
       recorder,
       shortcuts,
+      paster,
       dictation,
       history,
       models,

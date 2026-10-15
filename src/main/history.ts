@@ -1,6 +1,7 @@
 import { readdirSync, statSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
+import type { PasteResult } from '../shared/state';
 import type { HistoryEntry, HistoryStatus } from '../shared/transcription';
 import { logger } from './log';
 
@@ -28,6 +29,11 @@ export interface HistoryUpdate {
   engine?: string | null;
   model?: string | null;
   transcriptionMs?: number | null;
+  pastedText?: string | null;
+  appName?: string | null;
+  appBundleId?: string | null;
+  pasteResult?: PasteResult | null;
+  pasteMs?: number | null;
   error?: string | null;
 }
 
@@ -38,6 +44,11 @@ const COLUMNS: Record<keyof HistoryUpdate, string> = {
   engine: 'engine',
   model: 'model',
   transcriptionMs: 'transcription_ms',
+  pastedText: 'pasted_text',
+  appName: 'app_name',
+  appBundleId: 'app_bundle_id',
+  pasteResult: 'paste_result',
+  pasteMs: 'paste_ms',
   error: 'error',
 };
 
@@ -69,11 +80,23 @@ export class History {
     return row?.audio_path == null ? null : String(row.audio_path);
   }
 
+  /** El texto del último dictado que tenía algo que pegar. */
+  lastText(): string | null {
+    const row = this.db
+      .prepare(
+        `SELECT COALESCE(pasted_text, asr_text) AS text FROM history
+         WHERE status = 'done' AND COALESCE(pasted_text, asr_text, '') <> ''
+         ORDER BY created_at DESC LIMIT 1`,
+      )
+      .get();
+    return row?.text == null ? null : String(row.text);
+  }
+
   recent(limit: number): HistoryEntry[] {
     const rows = this.db
       .prepare(
         `SELECT id, created_at, status, duration_ms, audio_path, asr_text, language, engine, model,
-                transcription_ms, error
+                transcription_ms, pasted_text, app_name, paste_result, paste_ms, error
          FROM history ORDER BY created_at DESC LIMIT ?`,
       )
       .all(Math.max(1, Math.min(200, Math.floor(limit))));
@@ -88,6 +111,10 @@ export class History {
       engine: r.engine == null ? null : String(r.engine),
       model: r.model == null ? null : String(r.model),
       transcriptionMs: r.transcription_ms == null ? null : Number(r.transcription_ms),
+      pastedText: r.pasted_text == null ? null : String(r.pasted_text),
+      appName: r.app_name == null ? null : String(r.app_name),
+      pasteResult: r.paste_result == null ? null : (String(r.paste_result) as PasteResult),
+      pasteMs: r.paste_ms == null ? null : Number(r.paste_ms),
       error: r.error == null ? null : String(r.error),
     }));
   }

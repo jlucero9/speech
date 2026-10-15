@@ -1,6 +1,8 @@
 // Datos de la transcripción que comparten main y la interfaz: modelos locales,
 // idiomas y entradas del historial.
 
+import type { PasteResult } from './state';
+
 /**
  * Modelos de whisper.cpp que la app sabe descargar. Solo uno: los más pequeños
  * se equivocan demasiado en español para compensar lo que ahorran.
@@ -117,5 +119,12 @@ export interface HistoryEntry {
   engine: string | null;
   model: string | null;
   transcriptionMs: number | null;
+  /** Texto que se envió a pegar. */
+  pastedText: string | null;
+  /** App en la que se pegó (o se intentó). */
+  appName: string | null;
+  pasteResult: PasteResult | null;
+  /** Desde soltar la tecla hasta que la app pidió el texto. */
+  pasteMs: number | null;
   error: string | null;
 }

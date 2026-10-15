@@ -67,4 +67,17 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE history ADD COLUMN transcription_ms INTEGER;
     `,
   },
+  {
+    id: 4,
+    name: 'history-paste-result',
+    // Cómo acabó el pegado de cada dictado (pasted_text, app_name y
+    // app_bundle_id ya existían). paste_result: 'pasted', 'pasted_unverified',
+    // 'unconfirmed', 'not_requested', 'target_gone', 'focus_failed', 'failed'
+    // o 'empty'; NULL si no se intentó. paste_ms: desde
+    // soltar la tecla hasta que la app pidió el texto.
+    sql: `
+      ALTER TABLE history ADD COLUMN paste_result TEXT;
+      ALTER TABLE history ADD COLUMN paste_ms INTEGER;
+    `,
+  },
 ];

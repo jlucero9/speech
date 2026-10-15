@@ -2,7 +2,7 @@
 // una copia completa en cada cambio (es pequeño). Las ventanas no lo modifican
 // directamente: piden acciones por IPC (ver ipc.ts).
 
-import type { FnUsage } from './helper-protocol';
+import type { FnUsage, HelperPasteResult } from './helper-protocol';
 import type { Preferences } from './preferences';
 import type { TranscriptionState } from './transcription';
 
@@ -69,6 +69,21 @@ export type DictationOutcome =
   | 'discarded' // descartado sin audio útil: toque corto, otra combinación…
   | 'failed'; // no pudo arrancar, grabar o transcribir; el audio se conserva si llegó a guardarse
 
+/**
+ * Cómo acabó el pegado de un dictado: los resultados del helper y además
+ * `pending` (⌘V enviado, sin resultado aún), `empty` (no había texto que
+ * pegar) y `failed` (el helper no respondió; main dejó el texto en el
+ * portapapeles).
+ */
+export type PasteResult = HelperPasteResult | 'pending' | 'empty' | 'failed';
+
+export interface PasteInfo {
+  result: PasteResult;
+  appName: string | null;
+  /** Desde soltar la tecla hasta que la app pidió el texto. */
+  ms: number | null;
+}
+
 export interface DictationResult {
   id: string;
   outcome: DictationOutcome;
@@ -84,6 +99,8 @@ export interface DictationResult {
   language: string | null;
   /** Desde que acabó la grabación hasta tener el texto. */
   transcriptionMs: number | null;
+  /** null si no se llegó a pegar (cancelado, fallido…). */
+  paste: PasteInfo | null;
   at: number;
 }
 

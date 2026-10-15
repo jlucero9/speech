@@ -13,7 +13,7 @@ import ApplicationServices
 // - pasan 15 s sin ningún mensaje de main.
 
 final class Helper {
-    static let protocolVersion = 2
+    static let protocolVersion = 3
     private static let orphanTimeout: TimeInterval = 15
     private static let accessibilityPollInterval: TimeInterval = 2
     private static let tapRetryInterval: TimeInterval = 10
@@ -28,6 +28,7 @@ final class Helper {
     private var activity: NSObjectProtocol?
     private let keyboard = Keyboard()
     private let secureInput = SecureInputMonitor()
+    private let paster = Paster()
 
     init(launchedAt: Date) {
         self.launchedAt = launchedAt
@@ -51,6 +52,9 @@ final class Helper {
         observeAccessibilityChanges()
         observeWake()
         Log.info("Helper started: pid \(getpid()), responsibility disclaimed: \(Responsibility.isDisclaimed), accessibility: \(accessibilityTrusted)")
+        if #available(macOS 15.4, *) {
+            Log.info("Clipboard access: \(NSPasteboard.general.accessBehavior.rawValue) (0 default, 1 ask, 2 allow, 3 deny)")
+        }
     }
 
     // MARK: Mensajes
@@ -93,6 +97,18 @@ final class Helper {
             let released = keyboard.releasedKeys(among: keys)
             if !released.isEmpty { Log.info("Stale keys released: \(released)") }
             ipc.respond(to: request.id, type: "StaleKeys", payload: ["released": released])
+        case "CaptureTarget":
+            let id = request.payload["id"] as? String ?? ""
+            ipc.respond(to: request.id, type: "Target", payload: paster.captureTarget(id: id))
+        case "PasteText":
+            guard let pasteId = request.payload["pasteId"] as? String, let text = request.payload["text"] as? String else {
+                ipc.respond(to: request.id, type: "Error", payload: ["message": "PasteText needs pasteId and text"])
+                return
+            }
+            let targetId = request.payload["targetId"] as? String
+            paster.paste(id: pasteId, text: text, targetId: targetId) { [ipc] payload in
+                ipc?.respond(to: request.id, type: "PasteStarted", payload: payload)
+            }
         case "GetKeyboardStatus":
             ipc.respond(to: request.id, type: "KeyboardStatus", payload: keyboardStatus())
         case "RequestInputMonitoring":
@@ -119,6 +135,9 @@ final class Helper {
                 "reason": reason,
                 "listenAccess": CGPreflightListenEventAccess(),
             ])
+        }
+        paster.onOutcome = { [ipc] payload in
+            ipc?.emit(event: "PasteOutcome", payload: payload)
         }
         secureInput.onChange = { [weak self] _, _ in
             guard let self else { return }

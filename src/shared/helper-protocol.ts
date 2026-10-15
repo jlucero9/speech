@@ -14,13 +14,18 @@
 // Cualquier mensaje de main cuenta como latido para el helper: si pasan 15 s
 // sin ninguno, el helper se cierra solo.
 //
+// Pegado: al empezar un dictado main pide `CaptureTarget` (el helper anota la
+// app y el campo con foco); al terminar, `PasteText` con la misma clave. La
+// respuesta llega al enviar el ⌘V (o al saber que no se enviará) y el
+// resultado después, en el evento `PasteOutcome`.
+//
 // Teclado: el helper no envía todas las teclas. Envía las de los atajos y,
 // mientras una de ellas está pulsada, las que la acompañan; del resto solo
 // cuenta cuántas hay pulsadas (`hidden`). Main interpreta los atajos.
 
 import type { ShortcutBinding } from './shortcuts';
 
-export const HELPER_PROTOCOL_VERSION = 2;
+export const HELPER_PROTOCOL_VERSION = 3;
 
 /** Tope de una línea; algo más largo es un fallo del otro lado. */
 export const HELPER_MAX_LINE_BYTES = 1024 * 1024;
@@ -67,6 +72,52 @@ export interface HelperRequests {
     payload: Record<string, never>;
     response: { type: 'InputMonitoringStatus'; payload: { granted: boolean } };
   };
+  /** Anota con la clave `id` la app de delante y su elemento con foco. Vacío si no hay app. */
+  CaptureTarget: {
+    payload: { id: string };
+    response: { type: 'Target'; payload: Partial<PasteTargetInfo> };
+  };
+  /**
+   * Pega `text` en la app anotada con `targetId` (o donde esté el foco).
+   * `posted: false`: no se envió el ⌘V; el motivo llega en `PasteOutcome`.
+   */
+  PasteText: {
+    payload: { pasteId: string; text: string; targetId?: string | null };
+    response: { type: 'PasteStarted'; payload: { posted: boolean } };
+  };
+}
+
+export interface PasteTargetInfo {
+  pid: number;
+  appName: string | null;
+  bundleId: string | null;
+}
+
+/**
+ * Resultado de un pegado según el helper. Solo los dos primeros restauran el
+ * portapapeles; en los demás el texto queda en él para pegarlo a mano.
+ */
+export type HelperPasteResult =
+  | 'pasted' // una app pidió el texto y está en el campo con foco
+  | 'pasted_unverified' // una app pidió el texto; el campo no deja leer su contenido
+  | 'unconfirmed' // alguien pidió el texto, pero no consta que llegara al campo
+  | 'not_requested' // nadie pidió el texto en 1 s
+  | 'target_gone' // la app de destino se cerró
+  | 'focus_failed'; // la app de destino no volvió a ponerse delante
+
+export interface PasteOutcomePayload {
+  pasteId: string;
+  result: HelperPasteResult;
+  /** Desde que el helper recibió PasteText hasta el ⌘V. */
+  keystrokeMs: number | null;
+  /** Desde que el helper recibió PasteText hasta que una app pidió el texto. */
+  requestedMs: number | null;
+  /** Qué se vio en el campo con foco tras pegar. */
+  verification: 'found' | 'not_found' | 'not_editable' | 'unavailable' | null;
+  /** El texto se pidió antes del ⌘V: lo leyó otro proceso. */
+  earlyRead: boolean;
+  appName: string | null;
+  bundleId: string | null;
 }
 
 export type HelperTapState = 'active' | 'no-permission' | 'failed' | 'stopped';
@@ -101,6 +152,7 @@ export interface HelperEvents {
   /** `reason: 'storm'` con `state: 'failed'`: el helper va a salir para que main lo relance. */
   TapStatus: { state: HelperTapState; reason: string; listenAccess: boolean };
   SecureInputStatus: SecureInputPayload;
+  PasteOutcome: PasteOutcomePayload;
 }
 
 export type HelperRequestMessage = {

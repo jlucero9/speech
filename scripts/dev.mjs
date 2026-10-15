@@ -85,7 +85,17 @@ writeFileSync(LOG, '');
 const args = [CODIGO];
 if (debug) args.push('--inspect=127.0.0.1:9339', '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=9338');
 const env = debug ? { ...entorno, SPEECH_DEBUG: '1' } : entorno;
-paso('open', ['-a', APP, '--stdout', LOG, '--stderr', LOG, '--args', ...args], env);
+// Justo después de cerrar la instancia anterior, LaunchServices aún puede
+// darla por viva y `open` falla con -600: se reintenta unas veces.
+for (let intento = 1; ; intento++) {
+  const r = spawnSync('open', ['-a', APP, '--stdout', LOG, '--stderr', LOG, '--args', ...args], { cwd: raiz, stdio: 'inherit', env });
+  if (r.status === 0) break;
+  if (intento === 5) {
+    console.error('\nFalló: open');
+    process.exit(r.status ?? 1);
+  }
+  await new Promise((res) => setTimeout(res, 1000));
+}
 
 if (!(await esperar(() => pidEnMarcha() !== null, 10000))) {
   console.error('La app no arrancó. Registro:', LOG);

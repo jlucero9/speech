@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import type { SharedState } from '../shared/state';
+import type { PasteResult, SharedState } from '../shared/state';
 import {
   DICTATION_LANGUAGES,
   LOCAL_MODELS,
@@ -240,10 +240,11 @@ function LastDictationRow({ state }: { state: SharedState }) {
   if (!last) return null;
   const tone = last.outcome === 'done' ? 'ok' : last.outcome === 'failed' ? 'error' : 'muted';
   const badge = { done: 'Done', cancelled: 'Cancelled', discarded: 'Discarded', failed: 'Failed' }[last.outcome];
+  const paste = last.paste ? pasteSummary(last.paste.result, last.paste.appName, last.paste.ms) : null;
   return (
     <Row
       label="Last dictation"
-      description={last.text ? `“${last.text}” · ${last.message}` : last.message}
+      description={[last.text ? `“${last.text}”` : null, last.message, paste].filter(Boolean).join(' · ')}
       status={
         <>
           <Badge tone={tone}>{badge}</Badge>
@@ -354,7 +355,7 @@ function RecentDictations({ state }: { state: SharedState }) {
   const [entries, setEntries] = useState<HistoryEntry[] | null>(null);
   const last = state.dictation.last;
   // Cada dictado que termina cambia `last`: se vuelve a leer la lista.
-  const key = last ? `${last.id}:${last.outcome}:${last.file ?? ''}` : '';
+  const key = last ? `${last.id}:${last.outcome}:${last.file ?? ''}:${last.paste?.result ?? ''}` : '';
   useEffect(() => {
     let alive = true;
     void window.speech.listHistory(10).then((rows) => alive && setEntries(rows));
@@ -387,6 +388,7 @@ function HistoryRow({ entry: e }: { entry: HistoryEntry }) {
     e.transcriptionMs != null ? `transcribed in ${(e.transcriptionMs / 1000).toFixed(1)} s` : null,
     e.model && isLocalModelId(e.model) ? LOCAL_MODELS[e.model].label : e.model,
     e.language,
+    e.pasteResult ? pasteSummary(e.pasteResult, e.appName, e.pasteMs) : null,
   ].filter(Boolean);
   const tone = e.status === 'done' ? 'ok' : e.status === 'failed' ? 'error' : 'muted';
   const label = { recording: 'Recording', processing: 'Transcribing', done: 'Done', cancelled: 'Cancelled', failed: 'Failed' }[
@@ -409,6 +411,30 @@ function HistoryRow({ entry: e }: { entry: HistoryEntry }) {
       </div>
     </div>
   );
+}
+
+function pasteSummary(result: PasteResult, appName: string | null, ms: number | null): string | null {
+  const app = appName ?? 'the app';
+  const time = ms != null ? ` ${(ms / 1000).toFixed(1)} s after release` : '';
+  switch (result) {
+    case 'pasted':
+    case 'pasted_unverified':
+      return `pasted into ${app}${time}`;
+    case 'pending':
+      return `pasting into ${app}…`;
+    case 'empty':
+      return null;
+    case 'not_requested':
+      return `not pasted (${app} didn't take it); left on the clipboard`;
+    case 'unconfirmed':
+      return 'paste not confirmed; left on the clipboard';
+    case 'target_gone':
+      return `not pasted (${app} closed); left on the clipboard`;
+    case 'focus_failed':
+      return `not pasted (couldn't switch back to ${app}); left on the clipboard`;
+    case 'failed':
+      return 'not pasted; left on the clipboard';
+  }
 }
 
 function Progress({ value, label }: { value: number; label: string }) {

@@ -2,8 +2,9 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import type { PasteTargetInfo } from '../../shared/helper-protocol';
 import type { RecorderEvent } from '../../shared/ipc';
-import type { DictationOutcome, DictationResult, DictationState, DictationStatus } from '../../shared/state';
+import type { DictationOutcome, DictationResult, DictationState, DictationStatus, PasteInfo } from '../../shared/state';
 import type { HelperProcess } from '../helper/helper-process';
 import type { History } from '../history';
 import { logger } from '../log';
@@ -11,7 +12,9 @@ import type { Permissions } from '../permissions';
 import type { RecorderWindow } from '../recorder-window';
 import type { Store } from '../store';
 import { TranscriptionError, type TranscriptionEngine } from '../transcription/engine';
+import type { PasteOutcome, Paster } from './paste';
 import type { ShortcutListener } from './shortcuts';
+import { checkVoice, MIN_SPEECH_MS } from './voice';
 import { BYTES_PER_MS, wavFile } from './wav';
 
 // Máquina de estados del dictado:
@@ -31,8 +34,11 @@ import { BYTES_PER_MS, wavFile } from './wav';
 //
 // El audio llega de la ventana de grabación en trozos de 40 ms (PCM de 16 bits
 // a 16 kHz). Al parar se concatena, se guarda como WAV en `recordings/`, se
-// anota en el historial y se transcribe. Al empezar a dictar se avisa al motor
-// para que cargue el modelo mientras el usuario habla.
+// anota en el historial, se transcribe y se pega. Al empezar a dictar se avisa
+// al motor para que cargue el modelo mientras el usuario habla, y al helper
+// para que anote dónde está el foco: el texto se pega ahí aunque el usuario
+// cambie de app mientras se transcribe. El dictado vuelve a «idle» al enviar
+// el ⌘V; el resultado del pegado llega después y completa la fila.
 
 const log = logger('dictation');
 
@@ -65,6 +71,12 @@ interface Session {
   message: string;
   keepAudio: boolean;
   doneTimer: NodeJS.Timeout | null;
+  /** App y campo con foco al empezar; se resuelve enseguida. */
+  target: Promise<PasteTargetInfo | null>;
+  /** Hora a la que se soltó la tecla (o se paró de otro modo). */
+  stoppedAt: number | null;
+  /** Hora a la que llegó todo el audio. */
+  audioAt: number | null;
 }
 
 export class Dictation {
@@ -90,6 +102,7 @@ export class Dictation {
     private readonly engine: TranscriptionEngine,
     private readonly history: History | null,
     private readonly vocabulary: () => string[],
+    private readonly paster: Paster,
   ) {
     mkdirSync(recordingsDir, { recursive: true });
     shortcuts.on('down', (action) => {
@@ -98,6 +111,8 @@ export class Dictation {
     });
     shortcuts.on('up', (action) => {
       if (action === 'ptt') this.pttUp();
+      else if (action === 'paste_last') this.pasteLast();
+      else if (action === 'copy_last') this.copyLast();
     });
     shortcuts.on('chord', (action) => {
       if (action === 'ptt') this.chord();
@@ -195,8 +210,9 @@ export class Dictation {
       return;
     }
 
+    const randomId = randomUUID();
     const s: Session = {
-      id: randomUUID(),
+      id: randomId,
       startedAt: Date.now(),
       openMs: null,
       chunks: [],
@@ -209,6 +225,9 @@ export class Dictation {
       message: '',
       keepAudio: false,
       doneTimer: null,
+      target: this.paster.captureTarget(randomId),
+      stoppedAt: null,
+      audioAt: null,
     };
     this.current = s;
     this.setStatus('initializing', 'ptt', {
@@ -240,6 +259,7 @@ export class Dictation {
     if (!s) return;
     this.detach(s);
     s.reason = reason;
+    s.stoppedAt = Date.now();
     this.setStatus('stopping', reason, { level: 0 });
     this.awaitDone(s);
   }
@@ -282,6 +302,7 @@ export class Dictation {
   private async finish(s: Session): Promise<void> {
     if (!this.closing.delete(s.id)) return;
     if (s.doneTimer) clearTimeout(s.doneTimer);
+    s.audioAt = Date.now();
     const pcm = Buffer.concat(s.chunks);
     s.chunks = [];
     const durationMs = Math.round(pcm.length / BYTES_PER_MS);
@@ -311,8 +332,9 @@ export class Dictation {
     } else {
       const file = await this.save(s, pcm);
       result = file
-        ? await this.transcribe(s, file, durationMs)
+        ? await this.transcribe(s, file, pcm, durationMs)
         : { ...this.result(s, null), outcome: 'failed', reason: 'write_failed', message: 'Could not save the audio.' };
+      if (result.outcome === 'done') result = await this.paste(s, result);
     }
     if (this.state.id === s.id) {
       this.setStatus('idle', result.reason, { handsFree: false, level: 0, last: result });
@@ -321,9 +343,27 @@ export class Dictation {
     }
   }
 
-  private async transcribe(s: Session, file: string, durationMs: number): Promise<DictationResult> {
+  private async transcribe(s: Session, file: string, pcm: Buffer, durationMs: number): Promise<DictationResult> {
     const language = this.store.get().prefs.dictationLanguage;
     this.record(s, durationMs, file, 'processing', { language });
+    const voice = checkVoice(pcm);
+    if (voice.speechMs < MIN_SPEECH_MS) {
+      // Sin voz, whisper se inventaría una frase: ni se transcribe ni se pega.
+      log.info(
+        `Dictation ${short(s.id)}: no speech (${voice.speechMs} ms above the threshold, ` +
+          `floor ${voice.floorDb.toFixed(0)} dBFS, peak ${voice.peakDb.toFixed(0)} dBFS); not transcribing`,
+      );
+      this.updateHistory(s.id, { status: 'done', asrText: '' });
+      return {
+        ...this.result(s, file),
+        durationMs,
+        outcome: 'done',
+        reason: 'no_speech',
+        message: 'No speech detected.',
+        text: '',
+        language,
+      };
+    }
     const abort = new AbortController();
     this.transcribing = { id: s.id, abort };
     const base = { ...this.result(s, file), durationMs };
@@ -366,6 +406,93 @@ export class Dictation {
       };
     } finally {
       if (this.transcribing?.abort === abort) this.transcribing = null;
+    }
+  }
+
+  // MARK: Pegado
+
+  private async paste(s: Session, r: DictationResult): Promise<DictationResult> {
+    const text = r.text ?? '';
+    if (!text.trim()) {
+      log.info(`Dictation ${short(s.id)}: nothing to paste`);
+      this.updateHistory(s.id, { pasteResult: 'empty' });
+      return { ...r, paste: { result: 'empty', appName: null, ms: null } };
+    }
+    const target = await s.target;
+    const sentAt = Date.now();
+    this.updateHistory(s.id, {
+      pastedText: text,
+      appName: target?.appName ?? null,
+      appBundleId: target?.bundleId ?? null,
+    });
+    const job = this.paster.paste(s.id, text, target ? s.id : null);
+    // Si no se llega a enviar el ⌘V, el resultado llega antes que la respuesta.
+    let settled: PasteInfo | null = null;
+    void job.outcome.then((o) => {
+      settled = this.pasted(s, sentAt, o);
+    });
+    await job.posted;
+    return { ...r, paste: settled ?? { result: 'pending', appName: target?.appName ?? null, ms: null } };
+  }
+
+  /** Resultado del pegado: completa la fila y, si se ve, el último dictado. */
+  private pasted(s: Session, sentAt: number, o: PasteOutcome): PasteInfo {
+    const released = s.stoppedAt ?? sentAt;
+    const ms = o.requestedMs != null ? sentAt - released + o.requestedMs : null;
+    const steps = [
+      s.audioAt != null ? `audio ${s.audioAt - released} ms` : null,
+      s.audioAt != null ? `transcription and saving ${sentAt - s.audioAt} ms` : null,
+      o.keystrokeMs != null ? `⌘V ${o.keystrokeMs} ms` : null,
+      o.requestedMs != null && o.keystrokeMs != null ? `read ${o.requestedMs - o.keystrokeMs} ms after ⌘V` : null,
+    ].filter(Boolean);
+    log.info(
+      `Dictation ${short(s.id)}: paste ${o.result} in ${o.appName ?? '?'}` +
+        (ms != null ? `, text in the app ${ms} ms after release` : '') +
+        (steps.length ? ` (${steps.join(', ')})` : '') +
+        (o.detail ? `; ${o.detail}` : ''),
+    );
+    this.updateHistory(s.id, {
+      pasteResult: o.result,
+      pasteMs: ms,
+      ...(o.appName ? { appName: o.appName, appBundleId: o.bundleId } : {}),
+    });
+    const info: PasteInfo = { result: o.result, appName: o.appName, ms };
+    const last = this.state.last;
+    if (last?.id === s.id) this.patch({ last: { ...last, paste: { ...info, appName: o.appName ?? last.paste?.appName ?? null } } });
+    return info;
+  }
+
+  /** Atajo «pegar el último dictado»: donde esté el foco ahora. */
+  private pasteLast(): void {
+    const text = this.lastText();
+    if (!text) {
+      log.info('Paste last: no dictation to paste');
+      return;
+    }
+    const id = randomUUID();
+    log.info(`Paste last: pasting ${text.length} chars (${short(id)})`);
+    const job = this.paster.paste(id, text, null);
+    void job.outcome.then((o) => log.info(`Paste last ${short(id)}: ${o.result} in ${o.appName ?? '?'}`));
+  }
+
+  private copyLast(): void {
+    const text = this.lastText();
+    if (!text) {
+      log.info('Copy last: no dictation to copy');
+      return;
+    }
+    this.paster.copy(text);
+    log.info(`Copy last: ${text.length} chars on the clipboard`);
+  }
+
+  private lastText(): string | null {
+    const last = this.state.last;
+    if (last?.outcome === 'done' && last.text?.trim()) return last.text;
+    try {
+      return this.history?.lastText() ?? null;
+    } catch (err) {
+      log.warn(`Could not read the last dictation: ${(err as Error).message}`);
+      return null;
     }
   }
 
@@ -524,6 +651,7 @@ function emptyResult(id: string): DictationResult {
     text: null,
     language: null,
     transcriptionMs: null,
+    paste: null,
     at: Date.now(),
   };
 }
