@@ -259,3 +259,34 @@ html {
   background: var(--success-fg);
   transition: width 120ms linear;
 }
+
+.meter-wide {
+  width: 120px;
+}
+
+.select {
+  font: inherit;
+  font-weight: 550;
+  color: var(--foreground);
+  background: var(--background-secondary);
+  border: none;
+  border-radius: 8px;
+  padding: 6px 8px;
+  max-width: 240px;
+}
+
+.select:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.history-row {
+  align-items: flex-start;
+}
+
+.history-text {
+  user-select: text;
+  cursor: text;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

@@ -4,6 +4,7 @@
 
 import type { FnUsage } from './helper-protocol';
 import type { Preferences } from './preferences';
+import type { TranscriptionState } from './transcription';
 
 export type HelperStatus =
   | 'starting' // proceso lanzado, esperando el primer ACK
@@ -58,15 +59,15 @@ export interface KeyboardState {
 }
 
 // Estados del dictado. «initializing»: abriendo el micrófono; «stopping»:
-// esperando los últimos trozos; «processing»: guardando (y, más adelante,
-// transcribiendo). Cancelar vuelve directamente a «idle».
+// esperando los últimos trozos; «processing»: guardando y transcribiendo.
+// Cancelar vuelve directamente a «idle».
 export type DictationStatus = 'idle' | 'initializing' | 'listening' | 'stopping' | 'processing';
 
 export type DictationOutcome =
-  | 'saved' // terminó y su audio se guardó
+  | 'done' // transcrito y guardado en el historial (el texto puede estar vacío si no se oyó nada)
   | 'cancelled' // cancelado por el usuario (el audio se guarda si dura ≥ 0,5 s)
   | 'discarded' // descartado sin audio útil: toque corto, otra combinación…
-  | 'failed'; // no pudo arrancar o se perdió por un fallo
+  | 'failed'; // no pudo arrancar, grabar o transcribir; el audio se conserva si llegó a guardarse
 
 export interface DictationResult {
   id: string;
@@ -77,6 +78,12 @@ export interface DictationResult {
   message: string;
   durationMs: number;
   file: string | null;
+  /** Texto transcrito, si se llegó a transcribir. */
+  text: string | null;
+  /** Idioma del texto (el elegido o el detectado). */
+  language: string | null;
+  /** Desde que acabó la grabación hasta tener el texto. */
+  transcriptionMs: number | null;
   at: number;
 }
 
@@ -101,6 +108,7 @@ export interface SharedState {
   };
   keyboard: KeyboardState;
   dictation: DictationState;
+  transcription: TranscriptionState;
   data: DataState;
   prefs: Preferences;
 }

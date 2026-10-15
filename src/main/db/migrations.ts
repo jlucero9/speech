@@ -54,4 +54,17 @@ export const MIGRATIONS: Migration[] = [
       CREATE UNIQUE INDEX dictionary_phrase ON dictionary (phrase COLLATE NOCASE);
     `,
   },
+  {
+    id: 3,
+    name: 'history-transcription-info',
+    // Con qué se transcribió cada dictado y cuánto tardó, para comparar motores
+    // y modelos. engine: 'local' (y, más adelante, los de la nube); model: el
+    // identificador del modelo; transcription_ms: desde que acabó la grabación
+    // hasta tener el texto.
+    sql: `
+      ALTER TABLE history ADD COLUMN engine TEXT;
+      ALTER TABLE history ADD COLUMN model TEXT;
+      ALTER TABLE history ADD COLUMN transcription_ms INTEGER;
+    `,
+  },
 ];

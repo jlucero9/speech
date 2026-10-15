@@ -3,6 +3,7 @@
 
 import type { Preferences } from './preferences';
 import type { SharedState } from './state';
+import type { HistoryEntry } from './transcription';
 
 export const IPC = {
   getState: 'state:get',
@@ -16,6 +17,8 @@ export const IPC = {
   openInputMonitoringSettings: 'permissions:open-input-monitoring-settings',
   openKeyboardSettings: 'settings:open-keyboard',
   revealRecording: 'dictation:reveal-recording',
+  downloadModel: 'transcription:download-model',
+  listHistory: 'history:list',
 } as const;
 
 /** Canales de la ventana de grabación (preload/recorder.ts). */
@@ -59,6 +62,10 @@ export interface SpeechApi {
   requestInputMonitoring(): Promise<void>;
   openInputMonitoringSettings(): Promise<void>;
   openKeyboardSettings(): Promise<void>;
-  /** Muestra en el Finder el fichero del último dictado. */
-  revealRecording(): Promise<void>;
+  /** Muestra en el Finder el audio de un dictado del historial, o el del último. */
+  revealRecording(id?: string): Promise<void>;
+  /** Empieza o reanuda la descarga del modelo elegido. */
+  downloadModel(): Promise<void>;
+  /** Los últimos dictados, del más reciente al más antiguo. */
+  listHistory(limit: number): Promise<HistoryEntry[]>;
 }

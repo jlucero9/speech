@@ -2,6 +2,7 @@ import type { WebContents } from 'electron';
 import { IPC } from '../shared/ipc';
 import { DEFAULT_PREFERENCES } from '../shared/preferences';
 import type { SharedState } from '../shared/state';
+import { DEFAULT_LOCAL_MODEL, LOCAL_MODELS } from '../shared/transcription';
 
 // Estado compartido entre main y las ventanas que lo piden. Varios cambios
 // seguidos se envían juntos en un solo mensaje al final de la tarea en curso.
@@ -68,6 +69,19 @@ export function initialState(): SharedState {
       level: 0,
       micSilent: false,
       last: null,
+    },
+    transcription: {
+      engine: 'local',
+      model: {
+        id: DEFAULT_LOCAL_MODEL,
+        status: 'checking',
+        receivedBytes: 0,
+        totalBytes: LOCAL_MODELS[DEFAULT_LOCAL_MODEL].sizeBytes,
+        bytesPerSecond: null,
+        error: null,
+        retryAt: null,
+      },
+      transcriber: { status: 'stopped', pid: null, memoryBytes: null, unloadAt: null, error: null },
     },
     data: { databaseReady: false, schemaVersion: 0, migrationsAppliedThisLaunch: 0, error: null },
     prefs: { ...DEFAULT_PREFERENCES },

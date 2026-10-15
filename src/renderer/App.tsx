@@ -1,5 +1,11 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import type { SharedState } from '../shared/state';
+import {
+  DICTATION_LANGUAGES,
+  LOCAL_MODELS,
+  isLocalModelId,
+  type HistoryEntry,
+} from '../shared/transcription';
 import { useSharedState } from './useSharedState';
 
 // Ventana provisional: muestra el estado de main mientras se construyen los
@@ -34,6 +40,12 @@ function Panels({ state }: { state: SharedState }) {
         <DictationRow state={state} />
         <LastDictationRow state={state} />
       </Section>
+      <Section title="Transcription">
+        <ModelRow state={state} />
+        <LanguageRow state={state} />
+        <TranscriberRow state={state} />
+      </Section>
+      <RecentDictations state={state} />
       <Section title="System">
         <HelperRow state={state} />
         <Row
@@ -198,7 +210,7 @@ function DictationRow({ state }: { state: SharedState }) {
     initializing: 'Starting…',
     listening: d.handsFree ? 'Listening · hands-free' : 'Listening',
     stopping: 'Finishing…',
-    processing: 'Saving…',
+    processing: 'Transcribing…',
   }[d.status];
   const description = d.micSilent
     ? 'No sound is coming from the microphone.'
@@ -206,7 +218,9 @@ function DictationRow({ state }: { state: SharedState }) {
       ? d.handsFree
         ? 'Press fn again to stop. Esc cancels.'
         : 'Release fn to stop. Esc cancels.'
-      : 'Current state of dictation.';
+      : d.status === 'processing'
+        ? 'Esc cancels.'
+        : 'Current state of dictation.';
   return (
     <Row
       label="Status"
@@ -224,12 +238,12 @@ function DictationRow({ state }: { state: SharedState }) {
 function LastDictationRow({ state }: { state: SharedState }) {
   const last = state.dictation.last;
   if (!last) return null;
-  const tone = last.outcome === 'saved' ? 'ok' : last.outcome === 'failed' ? 'error' : 'muted';
-  const badge = { saved: 'Saved', cancelled: 'Cancelled', discarded: 'Discarded', failed: 'Failed' }[last.outcome];
+  const tone = last.outcome === 'done' ? 'ok' : last.outcome === 'failed' ? 'error' : 'muted';
+  const badge = { done: 'Done', cancelled: 'Cancelled', discarded: 'Discarded', failed: 'Failed' }[last.outcome];
   return (
     <Row
       label="Last dictation"
-      description={last.message}
+      description={last.text ? `“${last.text}” · ${last.message}` : last.message}
       status={
         <>
           <Badge tone={tone}>{badge}</Badge>
@@ -242,6 +256,171 @@ function LastDictationRow({ state }: { state: SharedState }) {
       }
     />
   );
+}
+
+function ModelRow({ state }: { state: SharedState }) {
+  const m = state.transcription.model;
+  const spec = LOCAL_MODELS[m.id];
+  const now = useNow(m.retryAt !== null);
+  const pct = m.totalBytes ? Math.floor((m.receivedBytes / m.totalBytes) * 100) : 0;
+  const size = `${mb(spec.sizeBytes)} MB`;
+  let description: string;
+  let status: ReactNode;
+  switch (m.status) {
+    case 'checking':
+      description = `Checking ${spec.label}…`;
+      status = <Badge tone="muted">Checking…</Badge>;
+      break;
+    case 'missing':
+      description = `${spec.label} (${size}) is needed to transcribe on this Mac.`;
+      status = <Button onClick={() => window.speech.downloadModel()}>Download</Button>;
+      break;
+    case 'downloading':
+      description =
+        `Downloading ${spec.label}: ${mb(m.receivedBytes)} of ${mb(m.totalBytes)} MB` +
+        (m.bytesPerSecond ? ` · ${(m.bytesPerSecond / 1024 / 1024).toFixed(1)} MB/s` : '') +
+        '. You can keep using your Mac; it resumes if interrupted.';
+      status = (
+        <>
+          <Progress value={pct / 100} label="Download progress" />
+          <Badge tone="muted">{pct}%</Badge>
+        </>
+      );
+      break;
+    case 'verifying':
+      description = `Checking that ${spec.label} downloaded correctly…`;
+      status = <Badge tone="muted">Verifying…</Badge>;
+      break;
+    case 'ready':
+      description = `${spec.label} is on this Mac. Dictation works offline.`;
+      status = <Badge tone="ok">Ready</Badge>;
+      break;
+    case 'failed': {
+      const secs = m.retryAt ? Math.max(0, Math.ceil((m.retryAt - now) / 1000)) : 0;
+      description = `${m.error ?? 'The download failed.'}${secs ? ` Retrying in ${secs} s.` : ''}`;
+      status = (
+        <>
+          <Badge tone="error">Not downloaded</Badge>
+          <Button onClick={() => window.speech.downloadModel()}>{m.receivedBytes ? 'Resume' : 'Try again'}</Button>
+        </>
+      );
+      break;
+    }
+  }
+  return <Row label="Speech model" description={description} status={status} />;
+}
+
+function LanguageRow({ state }: { state: SharedState }) {
+  const current = state.prefs.dictationLanguage;
+  return (
+    <Row
+      label="Language"
+      description="The language you dictate in."
+      status={
+        <Select
+          label="Language"
+          value={current}
+          options={Object.entries(DICTATION_LANGUAGES)}
+          onChange={(v) => void window.speech.setPreference('dictationLanguage', v)}
+        />
+      }
+    />
+  );
+}
+
+function TranscriberRow({ state }: { state: SharedState }) {
+  const t = state.transcription.transcriber;
+  const now = useNow(t.unloadAt !== null);
+  const memory = t.memoryBytes ? ` · ${mb(t.memoryBytes)} MB` : '';
+  const mins = t.unloadAt ? Math.max(1, Math.ceil((t.unloadAt - now) / 60_000)) : 0;
+  const [badge, tone, description]: [string, 'ok' | 'warn' | 'error' | 'muted', string] = (() => {
+    switch (t.status) {
+      case 'stopped':
+        return ['Not loaded', 'muted', 'The model loads when you start dictating and is freed after a few idle minutes.'];
+      case 'loading':
+        return ['Loading…', 'muted', 'Loading the model.'];
+      case 'ready':
+        return ['Loaded', 'ok', `In memory${memory}${mins ? ` · freed in ${mins} min if unused` : ''}.`];
+      case 'busy':
+        return ['Transcribing…', 'ok', `In memory${memory}.`];
+      case 'failed':
+        return ['Stopped', 'warn', `${t.error ?? 'The transcriber stopped.'} It starts again with the next dictation.`];
+    }
+  })();
+  return <Row label="Transcriber" description={description} status={<Badge tone={tone}>{badge}</Badge>} />;
+}
+
+function RecentDictations({ state }: { state: SharedState }) {
+  const [entries, setEntries] = useState<HistoryEntry[] | null>(null);
+  const last = state.dictation.last;
+  // Cada dictado que termina cambia `last`: se vuelve a leer la lista.
+  const key = last ? `${last.id}:${last.outcome}:${last.file ?? ''}` : '';
+  useEffect(() => {
+    let alive = true;
+    void window.speech.listHistory(10).then((rows) => alive && setEntries(rows));
+    return () => {
+      alive = false;
+    };
+  }, [key]);
+  if (!entries) return null;
+  return (
+    <Section title="Recent dictations">
+      {entries.length === 0 ? (
+        <Row label="Nothing yet" description="Hold fn, speak and release. Your dictations appear here." status={null} />
+      ) : (
+        entries.map((e) => <HistoryRow key={e.id} entry={e} />)
+      )}
+    </Section>
+  );
+}
+
+function HistoryRow({ entry: e }: { entry: HistoryEntry }) {
+  const when = new Date(e.createdAt).toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+  const facts = [
+    when,
+    e.durationMs != null ? `${(e.durationMs / 1000).toFixed(1)} s` : null,
+    e.transcriptionMs != null ? `transcribed in ${(e.transcriptionMs / 1000).toFixed(1)} s` : null,
+    e.model && isLocalModelId(e.model) ? LOCAL_MODELS[e.model].label : e.model,
+    e.language,
+  ].filter(Boolean);
+  const tone = e.status === 'done' ? 'ok' : e.status === 'failed' ? 'error' : 'muted';
+  const label = { recording: 'Recording', processing: 'Transcribing', done: 'Done', cancelled: 'Cancelled', failed: 'Failed' }[
+    e.status
+  ];
+  const text = e.text ? e.text : e.status === 'done' ? 'No speech detected.' : (e.error ?? '');
+  return (
+    <div className="row history-row" data-row="history">
+      <div className="row-text">
+        <div className={`history-text ${e.text ? '' : 'muted'}`}>{text}</div>
+        <div className="row-description">{facts.join(' · ')}</div>
+      </div>
+      <div className="row-status">
+        <Badge tone={tone}>{label}</Badge>
+        {e.audioPath && (
+          <Button variant="secondary" onClick={() => window.speech.revealRecording(e.id)}>
+            Audio
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Progress({ value, label }: { value: number; label: string }) {
+  return (
+    <span className="meter meter-wide" role="progressbar" aria-label={label} aria-valuenow={Math.round(value * 100)} aria-valuemin={0} aria-valuemax={100}>
+      <span className="meter-fill" style={{ width: `${Math.round(value * 100)}%` }} />
+    </span>
+  );
+}
+
+function mb(bytes: number): number {
+  return Math.round(bytes / 1024 / 1024);
 }
 
 function LevelMeter({ level }: { level: number }) {
@@ -333,6 +512,28 @@ function Button({
     <button type="button" className={`button button-${variant}`} onClick={() => void onClick()} disabled={disabled}>
       {children}
     </button>
+  );
+}
+
+function Select({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: [string, string][];
+  onChange: (v: string) => void;
+}) {
+  return (
+    <select className="select" aria-label={label} value={value} onChange={(e) => onChange(e.target.value)}>
+      {options.map(([v, text]) => (
+        <option key={v} value={v}>
+          {text}
+        </option>
+      ))}
+    </select>
   );
 }
 

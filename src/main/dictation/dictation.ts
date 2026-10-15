@@ -1,14 +1,16 @@
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, readdirSync, unlinkSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { RecorderEvent } from '../../shared/ipc';
 import type { DictationOutcome, DictationResult, DictationState, DictationStatus } from '../../shared/state';
 import type { HelperProcess } from '../helper/helper-process';
+import type { History } from '../history';
 import { logger } from '../log';
 import type { Permissions } from '../permissions';
 import type { RecorderWindow } from '../recorder-window';
 import type { Store } from '../store';
+import { TranscriptionError, type TranscriptionEngine } from '../transcription/engine';
 import type { ShortcutListener } from './shortcuts';
 import { BYTES_PER_MS, wavFile } from './wav';
 
@@ -28,8 +30,9 @@ import { BYTES_PER_MS, wavFile } from './wav';
 //   principio, por ejemplo): no era un dictado, se descarta.
 //
 // El audio llega de la ventana de grabación en trozos de 40 ms (PCM de 16 bits
-// a 16 kHz). Al parar se concatena y se guarda como WAV. Hasta que exista el
-// historial, se conservan los últimos ficheros en `recordings/`.
+// a 16 kHz). Al parar se concatena, se guarda como WAV en `recordings/`, se
+// anota en el historial y se transcribe. Al empezar a dictar se avisa al motor
+// para que cargue el modelo mientras el usuario habla.
 
 const log = logger('dictation');
 
@@ -42,7 +45,6 @@ const DONE_TIMEOUT_MS = 3_000;
 const LEVEL_EVERY_MS = 150;
 /** Medio segundo: menos no merece guardarse al cancelar. */
 const MIN_KEEP_BYTES = 16_000;
-const KEEP_RECORDINGS = 20;
 /** Rango de nivel que se pinta, en dBFS. */
 const LEVEL_FLOOR_DB = -60;
 
@@ -75,6 +77,8 @@ export class Dictation {
   private warnTimer: NodeJS.Timeout | null = null;
   private maxTimer: NodeJS.Timeout | null = null;
   private levelTimer: NodeJS.Timeout | null = null;
+  /** Transcripción en curso, para poder cancelarla con Esc. */
+  private transcribing: { id: string; abort: AbortController } | null = null;
 
   constructor(
     private readonly store: Store,
@@ -83,6 +87,9 @@ export class Dictation {
     private readonly permissions: Permissions,
     shortcuts: ShortcutListener,
     private readonly recordingsDir: string,
+    private readonly engine: TranscriptionEngine,
+    private readonly history: History | null,
+    private readonly vocabulary: () => string[],
   ) {
     mkdirSync(recordingsDir, { recursive: true });
     shortcuts.on('down', (action) => {
@@ -169,6 +176,9 @@ export class Dictation {
     const status = this.state.status;
     if (status === 'initializing' || status === 'listening' || status === 'stopping') {
       this.cancel('user_action_escape', 'user', 'Cancelled.');
+    } else if (status === 'processing' && this.transcribing?.id === this.state.id) {
+      log.info(`Dictation ${short(this.transcribing.id)}: transcription cancelled with Esc`);
+      this.transcribing.abort.abort();
     }
   }
 
@@ -209,6 +219,7 @@ export class Dictation {
       micSilent: false,
     });
     this.recorder.start(s.id);
+    this.engine.prepare(this.store.get().prefs.dictationLanguage);
 
     this.noAudioTimer = setTimeout(() => {
       if (this.current === s && s.bytes === 0) {
@@ -249,9 +260,7 @@ export class Dictation {
 
   private fail(reason: string, message: string): void {
     log.warn(`Dictation not started: ${reason}`);
-    this.patch({
-      last: { id: randomUUID(), outcome: 'failed', reason, message, durationMs: 0, file: null, at: Date.now() },
-    });
+    this.patch({ last: { ...emptyResult(randomUUID()), outcome: 'failed', reason, message } });
   }
 
   /** Suelta el dictado activo: deja de contar como «en curso». */
@@ -283,9 +292,11 @@ export class Dictation {
     );
 
     if (s.outcome) {
-      // Cancelado: el resultado ya se mostró. Se guarda el audio si lo pidió el usuario.
+      // Cancelado: el resultado ya se mostró. Si lo canceló el usuario, el audio
+      // se guarda en el historial para poder recuperarlo.
       if (s.keepAudio && pcm.length >= MIN_KEEP_BYTES) {
         const file = await this.save(s, pcm);
+        if (file) this.record(s, durationMs, file, 'cancelled', { error: `${s.reason}: ${s.message}` });
         if (file && this.state.last?.id === s.id) {
           this.patch({ last: { ...this.state.last, durationMs, file } });
         }
@@ -300,7 +311,7 @@ export class Dictation {
     } else {
       const file = await this.save(s, pcm);
       result = file
-        ? { ...this.result(s, file), outcome: 'saved', durationMs, message: `Saved ${(durationMs / 1000).toFixed(1)} s of audio.` }
+        ? await this.transcribe(s, file, durationMs)
         : { ...this.result(s, null), outcome: 'failed', reason: 'write_failed', message: 'Could not save the audio.' };
     }
     if (this.state.id === s.id) {
@@ -310,13 +321,60 @@ export class Dictation {
     }
   }
 
+  private async transcribe(s: Session, file: string, durationMs: number): Promise<DictationResult> {
+    const language = this.store.get().prefs.dictationLanguage;
+    this.record(s, durationMs, file, 'processing', { language });
+    const abort = new AbortController();
+    this.transcribing = { id: s.id, abort };
+    const base = { ...this.result(s, file), durationMs };
+    try {
+      const r = await this.engine.transcribe({
+        id: s.id,
+        audioPath: file,
+        durationMs,
+        language,
+        vocabulary: this.vocabulary(),
+        signal: abort.signal,
+      });
+      this.updateHistory(s.id, {
+        status: 'done',
+        asrText: r.text,
+        language: r.language,
+        engine: r.engine,
+        model: r.model,
+        transcriptionMs: r.ms,
+      });
+      return {
+        ...base,
+        outcome: 'done',
+        reason: 'transcribed',
+        message: r.text ? `Transcribed in ${(r.ms / 1000).toFixed(1)} s.` : 'No speech detected.',
+        text: r.text,
+        language: r.language,
+        transcriptionMs: r.ms,
+      };
+    } catch (err) {
+      const e = err instanceof TranscriptionError ? err : new TranscriptionError('engine_failed', (err as Error).message);
+      const cancelled = e.code === 'cancelled';
+      if (!cancelled) log.error(`Dictation ${short(s.id)}: transcription failed (${e.code}): ${e.message}`);
+      this.updateHistory(s.id, { status: cancelled ? 'cancelled' : 'failed', engine: this.engine.id, error: `${e.code}: ${e.message}` });
+      return {
+        ...base,
+        outcome: cancelled ? 'cancelled' : 'failed',
+        reason: cancelled ? 'user_action_escape' : `transcription_${e.code}`,
+        message: cancelled ? 'Cancelled. The audio is kept in your history.' : `${e.message} The audio is kept in your history.`,
+      };
+    } finally {
+      if (this.transcribing?.abort === abort) this.transcribing = null;
+    }
+  }
+
   private async save(s: Session, pcm: Buffer): Promise<string | null> {
     const stamp = new Date(s.startedAt).toISOString().replace(/[:.]/g, '-').replace('Z', '');
     const file = join(this.recordingsDir, `${stamp}-${short(s.id)}.wav`);
     try {
       await writeFile(file, wavFile(pcm));
       log.info(`Saved ${file}`);
-      this.prune();
       return file;
     } catch (err) {
       log.error(`Could not write ${file}`, err);
@@ -324,17 +382,36 @@ export class Dictation {
     }
   }
 
-  /** Sin historial todavía: se conservan los últimos ficheros. */
-  private prune(): void {
+  // MARK: Historial
+
+  private record(
+    s: Session,
+    durationMs: number,
+    file: string,
+    status: 'processing' | 'cancelled',
+    extra: { language?: string | null; error?: string },
+  ): void {
+    if (!this.history) return;
     try {
-      const files = readdirSync(this.recordingsDir)
-        .filter((f) => f.endsWith('.wav'))
-        .sort();
-      for (const f of files.slice(0, Math.max(0, files.length - KEEP_RECORDINGS))) {
-        unlinkSync(join(this.recordingsDir, f));
-      }
+      this.history.insert({
+        id: s.id,
+        createdAt: s.startedAt,
+        status,
+        durationMs,
+        audioPath: file,
+        language: extra.language ?? null,
+      });
+      if (extra.error) this.history.update(s.id, { error: extra.error });
     } catch (err) {
-      log.warn(`Could not prune recordings: ${(err as Error).message}`);
+      log.error(`Could not add dictation ${short(s.id)} to the history`, err);
+    }
+  }
+
+  private updateHistory(id: string, u: Parameters<History['update']>[1]): void {
+    try {
+      this.history?.update(id, u);
+    } catch (err) {
+      log.error(`Could not update dictation ${short(id)} in the history`, err);
     }
   }
 
@@ -408,13 +485,12 @@ export class Dictation {
 
   private result(s: Session, file: string | null): DictationResult {
     return {
-      id: s.id,
-      outcome: s.outcome ?? 'saved',
+      ...emptyResult(s.id),
+      outcome: s.outcome ?? 'done',
       reason: s.reason,
       message: s.message,
       durationMs: Math.round(s.bytes / BYTES_PER_MS),
       file,
-      at: Date.now(),
     };
   }
 
@@ -435,6 +511,21 @@ export class Dictation {
     if (this.levelTimer) clearInterval(this.levelTimer);
     this.noAudioTimer = this.warnTimer = this.maxTimer = this.levelTimer = null;
   }
+}
+
+function emptyResult(id: string): DictationResult {
+  return {
+    id,
+    outcome: 'failed',
+    reason: '',
+    message: '',
+    durationMs: 0,
+    file: null,
+    text: null,
+    language: null,
+    transcriptionMs: null,
+    at: Date.now(),
+  };
 }
 
 function short(id: string): string {

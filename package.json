@@ -25,10 +25,12 @@
     "start:debug": "node scripts/dev.mjs --debug",
     "build": "node scripts/build.mjs",
     "helper": "scripts/helper.sh",
+    "transcriber": "scripts/transcriber.sh",
     "typecheck": "tsc -p .",
     "firma:crear": "scripts/firma/crear-identidad.sh",
     "fuentes": "node scripts/descargar-fuentes.mjs",
     "iconos": "node scripts/iconos.mjs",
-    "cdp": "node scripts/cdp.mjs"
+    "cdp": "node scripts/cdp.mjs",
+    "medir": "node scripts/medir-transcripcion.mjs"
   }
 }

@@ -12,3 +12,9 @@ export function helperExecutable(): string {
   const bundle = join('SpeechHelper.app', 'Contents', 'MacOS', 'SpeechHelper');
   return app.isPackaged ? join(process.resourcesPath, bundle) : join(DEV_BUILD_DIR, 'helper', bundle);
 }
+
+export function transcriberExecutable(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'SpeechTranscriber')
+    : join(DEV_BUILD_DIR, 'transcriber', 'SpeechTranscriber');
+}

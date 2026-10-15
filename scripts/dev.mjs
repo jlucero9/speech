@@ -54,6 +54,7 @@ async function esperar(cond, ms) {
 
 paso('node', ['scripts/build.mjs']);
 paso(join(raiz, 'scripts', 'helper.sh'));
+paso(join(raiz, 'scripts', 'transcriber.sh'));
 paso(join(raiz, 'scripts', 'electron-dev.sh'));
 
 // Una instancia anterior se quedaría con el bloqueo de instancia única.

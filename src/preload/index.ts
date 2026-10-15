@@ -17,7 +17,9 @@ const api: SpeechApi = {
   requestInputMonitoring: () => ipcRenderer.invoke(IPC.requestInputMonitoring),
   openInputMonitoringSettings: () => ipcRenderer.invoke(IPC.openInputMonitoringSettings),
   openKeyboardSettings: () => ipcRenderer.invoke(IPC.openKeyboardSettings),
-  revealRecording: () => ipcRenderer.invoke(IPC.revealRecording),
+  revealRecording: (id) => ipcRenderer.invoke(IPC.revealRecording, id),
+  downloadModel: () => ipcRenderer.invoke(IPC.downloadModel),
+  listHistory: (limit) => ipcRenderer.invoke(IPC.listHistory, limit),
 };
 
 contextBridge.exposeInMainWorld('speech', api);
