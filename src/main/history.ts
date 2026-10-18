@@ -34,6 +34,12 @@ export interface HistoryUpdate {
   appBundleId?: string | null;
   pasteResult?: PasteResult | null;
   pasteMs?: number | null;
+  formattedText?: string | null;
+  formatResult?: string | null;
+  formatProvider?: string | null;
+  formatModel?: string | null;
+  formatMs?: number | null;
+  formatError?: string | null;
   error?: string | null;
 }
 
@@ -49,6 +55,12 @@ const COLUMNS: Record<keyof HistoryUpdate, string> = {
   appBundleId: 'app_bundle_id',
   pasteResult: 'paste_result',
   pasteMs: 'paste_ms',
+  formattedText: 'formatted_text',
+  formatResult: 'format_result',
+  formatProvider: 'format_provider',
+  formatModel: 'format_model',
+  formatMs: 'format_ms',
+  formatError: 'format_error',
   error: 'error',
 };
 
@@ -96,7 +108,8 @@ export class History {
     const rows = this.db
       .prepare(
         `SELECT id, created_at, status, duration_ms, audio_path, asr_text, language, engine, model,
-                transcription_ms, pasted_text, app_name, paste_result, paste_ms, error
+                transcription_ms, pasted_text, app_name, paste_result, paste_ms, error,
+                formatted_text, format_result, format_model, format_ms, format_error
          FROM history ORDER BY created_at DESC LIMIT ?`,
       )
       .all(Math.max(1, Math.min(200, Math.floor(limit))));
@@ -116,6 +129,11 @@ export class History {
       pasteResult: r.paste_result == null ? null : (String(r.paste_result) as PasteResult),
       pasteMs: r.paste_ms == null ? null : Number(r.paste_ms),
       error: r.error == null ? null : String(r.error),
+      formattedText: r.formatted_text == null ? null : String(r.formatted_text),
+      formatResult: r.format_result == null ? null : String(r.format_result),
+      formatModel: r.format_model == null ? null : String(r.format_model),
+      formatMs: r.format_ms == null ? null : Number(r.format_ms),
+      formatError: r.format_error == null ? null : String(r.format_error),
     }));
   }
 

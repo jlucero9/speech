@@ -20,6 +20,7 @@ import { Permissions } from './permissions';
 import { loadPreferences, savePreferences } from './preferences';
 import { RecorderWindow } from './recorder-window';
 import { initialState, Store } from './store';
+import { TextFormatting } from './formatting/service';
 import { LocalWhisper } from './transcription/local-whisper';
 import { ModelManager } from './transcription/models';
 import { createTray, setTrayStatus, setTrayWarning } from './tray';
@@ -115,6 +116,9 @@ function main(): void {
   recorder.create();
   const shortcuts = new ShortcutListener(helper, DEFAULT_SHORTCUTS);
   const paster = new Paster(helper);
+  // Formateo: Ollama en el equipo por defecto; si no responde, se pega la transcripción.
+  const formatting = new TextFormatting(store);
+  void formatting.check();
   const dictation = new Dictation(
     store,
     helper,
@@ -126,17 +130,23 @@ function main(): void {
     history,
     vocabulary,
     paster,
+    formatting,
   );
 
   helper.start();
   powerMonitor.on('resume', () => helper.noteResume());
   // Dormido no se dicta: el modelo no tiene por qué seguir ocupando memoria.
-  powerMonitor.on('suspend', () => engine.release('system sleep'));
+  powerMonitor.on('suspend', () => {
+    engine.release('system sleep');
+    formatting.release('system sleep');
+  });
 
   const showHub = (): void => {
     openHub(() => {
       permissions.refreshMicrophone();
       void keyboard.refresh();
+      // Ollama se arranca y se para por fuera: que el Hub no enseñe un estado viejo.
+      void formatting.check();
     });
   };
   createTray(showHub);
@@ -176,6 +186,7 @@ function main(): void {
     recorder.shutdown();
     models.stop();
     engine.release('quitting');
+    formatting.release('quitting');
     db?.close();
     db = null;
   });

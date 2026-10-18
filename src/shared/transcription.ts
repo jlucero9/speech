@@ -127,4 +127,11 @@ export interface HistoryEntry {
   /** Desde soltar la tecla hasta que la app pidió el texto. */
   pasteMs: number | null;
   error: string | null;
+  /** Texto formateado; null si no se formateó. */
+  formattedText: string | null;
+  /** 'formatted', 'off' o 'raw_<motivo>' (se pegó la transcripción tal cual). */
+  formatResult: string | null;
+  formatModel: string | null;
+  formatMs: number | null;
+  formatError: string | null;
 }

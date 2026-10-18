@@ -25,7 +25,7 @@
 
 import type { ShortcutBinding } from './shortcuts';
 
-export const HELPER_PROTOCOL_VERSION = 3;
+export const HELPER_PROTOCOL_VERSION = 4;
 
 /** Tope de una línea; algo más largo es un fallo del otro lado. */
 export const HELPER_MAX_LINE_BYTES = 1024 * 1024;
@@ -72,10 +72,13 @@ export interface HelperRequests {
     payload: Record<string, never>;
     response: { type: 'InputMonitoringStatus'; payload: { granted: boolean } };
   };
-  /** Anota con la clave `id` la app de delante y su elemento con foco. Vacío si no hay app. */
+  /**
+   * Anota con la clave `id` la app de delante y su elemento con foco, y lee el
+   * texto alrededor del cursor. Vacío si no hay app.
+   */
   CaptureTarget: {
     payload: { id: string };
-    response: { type: 'Target'; payload: Partial<PasteTargetInfo> };
+    response: { type: 'Target'; payload: Partial<PasteTargetInfo> & { context?: TargetContextPayload } };
   };
   /**
    * Pega `text` en la app anotada con `targetId` (o donde esté el foco).
@@ -91,7 +94,16 @@ export interface PasteTargetInfo {
   pid: number;
   appName: string | null;
   bundleId: string | null;
+  /** Texto alrededor del cursor (hasta 1 000 caracteres por lado); null si no se pudo leer. */
+  surroundings: { before: string; after: string; selected: string } | null;
+  /** Por qué no se leyó el texto, si no se leyó. */
+  surroundingsUnavailable: string | null;
 }
+
+/** Texto alrededor del cursor según el helper, o el motivo por el que no se leyó. */
+export type TargetContextPayload =
+  | { before: string; after: string; selected: string; role: string }
+  | { unavailable: string };
 
 /**
  * Resultado de un pegado según el helper. Solo los dos primeros restauran el

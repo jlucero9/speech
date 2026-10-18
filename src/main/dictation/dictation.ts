@@ -4,7 +4,10 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { PasteTargetInfo } from '../../shared/helper-protocol';
 import type { RecorderEvent } from '../../shared/ipc';
-import type { DictationOutcome, DictationResult, DictationState, DictationStatus, PasteInfo } from '../../shared/state';
+import type { DictationOutcome, DictationResult, DictationState, DictationStatus, FormatInfo, PasteInfo } from '../../shared/state';
+import { FormatError } from '../formatting/formatter';
+import type { TextFormatting } from '../formatting/service';
+import { fitToSurroundings } from '../formatting/surroundings';
 import type { HelperProcess } from '../helper/helper-process';
 import type { History } from '../history';
 import { logger } from '../log';
@@ -34,10 +37,11 @@ import { BYTES_PER_MS, wavFile } from './wav';
 //
 // El audio llega de la ventana de grabación en trozos de 40 ms (PCM de 16 bits
 // a 16 kHz). Al parar se concatena, se guarda como WAV en `recordings/`, se
-// anota en el historial, se transcribe y se pega. Al empezar a dictar se avisa
-// al motor para que cargue el modelo mientras el usuario habla, y al helper
-// para que anote dónde está el foco: el texto se pega ahí aunque el usuario
-// cambie de app mientras se transcribe. El dictado vuelve a «idle» al enviar
+// anota en el historial, se transcribe, se formatea y se pega. Al empezar a
+// dictar se avisa a los dos modelos (transcripción y formateo) para que carguen
+// mientras el usuario habla, y al helper para que anote dónde está el foco y
+// qué texto lo rodea: el texto se pega ahí aunque el usuario cambie de app
+// mientras se procesa, con los espacios que pida lo que ya hay escrito. El dictado vuelve a «idle» al enviar
 // el ⌘V; el resultado del pegado llega después y completa la fila.
 
 const log = logger('dictation');
@@ -89,7 +93,7 @@ export class Dictation {
   private warnTimer: NodeJS.Timeout | null = null;
   private maxTimer: NodeJS.Timeout | null = null;
   private levelTimer: NodeJS.Timeout | null = null;
-  /** Transcripción en curso, para poder cancelarla con Esc. */
+  /** Transcripción o formateo en curso, para poder cancelarlos con Esc. */
   private transcribing: { id: string; abort: AbortController } | null = null;
 
   constructor(
@@ -103,6 +107,7 @@ export class Dictation {
     private readonly history: History | null,
     private readonly vocabulary: () => string[],
     private readonly paster: Paster,
+    private readonly formatting: TextFormatting,
   ) {
     mkdirSync(recordingsDir, { recursive: true });
     shortcuts.on('down', (action) => {
@@ -192,7 +197,7 @@ export class Dictation {
     if (status === 'initializing' || status === 'listening' || status === 'stopping') {
       this.cancel('user_action_escape', 'user', 'Cancelled.');
     } else if (status === 'processing' && this.transcribing?.id === this.state.id) {
-      log.info(`Dictation ${short(this.transcribing.id)}: transcription cancelled with Esc`);
+      log.info(`Dictation ${short(this.transcribing.id)}: processing cancelled with Esc`);
       this.transcribing.abort.abort();
     }
   }
@@ -239,6 +244,7 @@ export class Dictation {
     });
     this.recorder.start(s.id);
     this.engine.prepare(this.store.get().prefs.dictationLanguage);
+    this.formatting.prepare();
 
     this.noAudioTimer = setTimeout(() => {
       if (this.current === s && s.bytes === 0) {
@@ -334,6 +340,7 @@ export class Dictation {
       result = file
         ? await this.transcribe(s, file, pcm, durationMs)
         : { ...this.result(s, null), outcome: 'failed', reason: 'write_failed', message: 'Could not save the audio.' };
+      if (result.outcome === 'done') result = await this.format(s, result);
       if (result.outcome === 'done') result = await this.paste(s, result);
     }
     if (this.state.id === s.id) {
@@ -361,6 +368,7 @@ export class Dictation {
         reason: 'no_speech',
         message: 'No speech detected.',
         text: '',
+        rawText: '',
         language,
       };
     }
@@ -390,6 +398,7 @@ export class Dictation {
         reason: 'transcribed',
         message: r.text ? `Transcribed in ${(r.ms / 1000).toFixed(1)} s.` : 'No speech detected.',
         text: r.text,
+        rawText: r.text,
         language: r.language,
         transcriptionMs: r.ms,
       };
@@ -404,6 +413,67 @@ export class Dictation {
         reason: cancelled ? 'user_action_escape' : `transcription_${e.code}`,
         message: cancelled ? 'Cancelled. The audio is kept in your history.' : `${e.message} The audio is kept in your history.`,
       };
+    } finally {
+      if (this.transcribing?.abort === abort) this.transcribing = null;
+    }
+  }
+
+  // MARK: Formateo
+
+  /**
+   * Formatea la transcripción y la ajusta al texto que rodea al cursor. Si el
+   * formateo no está, tarda demasiado o devuelve otra cosa, se pega la
+   * transcripción tal cual y el motivo queda en el historial.
+   */
+  private async format(s: Session, r: DictationResult): Promise<DictationResult> {
+    const raw = r.text ?? '';
+    if (!raw.trim()) return r;
+    const target = await s.target;
+    const vocabulary = this.vocabulary();
+    const abort = new AbortController();
+    this.transcribing = { id: s.id, abort };
+    try {
+      const o = await this.formatting.format(
+        {
+          id: s.id,
+          text: raw,
+          language: r.language ?? this.store.get().prefs.dictationLanguage,
+          appName: target?.appName ?? null,
+          surroundings: target?.surroundings ?? null,
+          vocabulary,
+        },
+        abort.signal,
+      );
+      const text = fitToSurroundings(o.text, target?.surroundings ?? null, vocabulary);
+      if (target && !target.surroundings) log.info(`Dictation ${short(s.id)}: no text around the cursor (${target.surroundingsUnavailable})`);
+      let format: FormatInfo;
+      if (o.result === 'formatted') {
+        format = { result: o.result, model: o.formatted.model, ms: o.formatted.ms };
+        this.updateHistory(s.id, {
+          formattedText: o.text,
+          formatResult: o.result,
+          formatProvider: o.formatted.provider,
+          formatModel: o.formatted.model,
+          formatMs: o.formatted.ms,
+        });
+      } else if (o.result === 'off') {
+        format = { result: o.result, model: null, ms: null };
+        this.updateHistory(s.id, { formatResult: o.result });
+      } else {
+        format = { result: o.result, model: o.model, ms: o.ms };
+        this.updateHistory(s.id, {
+          formatResult: o.result,
+          formatProvider: o.provider,
+          formatModel: o.model,
+          formatMs: o.ms,
+          formatError: o.error,
+        });
+      }
+      return { ...r, text, format };
+    } catch (err) {
+      if (!(err instanceof FormatError && err.code === 'cancelled')) throw err;
+      this.updateHistory(s.id, { status: 'cancelled', formatResult: 'raw_cancelled', error: 'user_action_escape: cancelled while formatting' });
+      return { ...r, outcome: 'cancelled', reason: 'user_action_escape', message: 'Cancelled. The text is kept in your history.' };
     } finally {
       if (this.transcribing?.abort === abort) this.transcribing = null;
     }
@@ -487,9 +557,10 @@ export class Dictation {
 
   private lastText(): string | null {
     const last = this.state.last;
-    if (last?.outcome === 'done' && last.text?.trim()) return last.text;
+    // Sin los espacios añadidos para el campo donde se pegó: ahora va a otro sitio.
+    if (last?.outcome === 'done' && last.text?.trim()) return last.text.trim();
     try {
-      return this.history?.lastText() ?? null;
+      return this.history?.lastText()?.trim() ?? null;
     } catch (err) {
       log.warn(`Could not read the last dictation: ${(err as Error).message}`);
       return null;
@@ -649,6 +720,8 @@ function emptyResult(id: string): DictationResult {
     durationMs: 0,
     file: null,
     text: null,
+    rawText: null,
+    format: null,
     language: null,
     transcriptionMs: null,
     paste: null,

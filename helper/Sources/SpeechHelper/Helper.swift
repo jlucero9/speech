@@ -13,7 +13,7 @@ import ApplicationServices
 // - pasan 15 s sin ningún mensaje de main.
 
 final class Helper {
-    static let protocolVersion = 3
+    static let protocolVersion = 4
     private static let orphanTimeout: TimeInterval = 15
     private static let accessibilityPollInterval: TimeInterval = 2
     private static let tapRetryInterval: TimeInterval = 10

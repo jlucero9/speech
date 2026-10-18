@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
+import { FORMATTING_PROVIDERS, type FormattingProvider } from '../shared/formatting';
 import type { PasteResult, SharedState } from '../shared/state';
 import {
   DICTATION_LANGUAGES,
@@ -44,6 +45,10 @@ function Panels({ state }: { state: SharedState }) {
         <ModelRow state={state} />
         <LanguageRow state={state} />
         <TranscriberRow state={state} />
+      </Section>
+      <Section title="Formatting">
+        <SmartFormattingRow state={state} />
+        <FormattingProviderRow state={state} />
       </Section>
       <RecentDictations state={state} />
       <Section title="System">
@@ -241,10 +246,11 @@ function LastDictationRow({ state }: { state: SharedState }) {
   const tone = last.outcome === 'done' ? 'ok' : last.outcome === 'failed' ? 'error' : 'muted';
   const badge = { done: 'Done', cancelled: 'Cancelled', discarded: 'Discarded', failed: 'Failed' }[last.outcome];
   const paste = last.paste ? pasteSummary(last.paste.result, last.paste.appName, last.paste.ms) : null;
+  const format = last.format ? formatSummary(last.format.result, last.format.ms) : null;
   return (
     <Row
       label="Last dictation"
-      description={[last.text ? `“${last.text}”` : null, last.message, paste].filter(Boolean).join(' · ')}
+      description={[last.text?.trim() ? `“${last.text.trim()}”` : null, last.message, format, paste].filter(Boolean).join(' · ')}
       status={
         <>
           <Badge tone={tone}>{badge}</Badge>
@@ -351,6 +357,79 @@ function TranscriberRow({ state }: { state: SharedState }) {
   return <Row label="Transcriber" description={description} status={<Badge tone={tone}>{badge}</Badge>} />;
 }
 
+function SmartFormattingRow({ state }: { state: SharedState }) {
+  return (
+    <Row
+      label="Smart Formatting"
+      description="Removes filler words and false starts, and fixes punctuation. Off: the transcript is pasted as is."
+      status={
+        <Switch
+          label="Smart Formatting"
+          checked={state.prefs.smartFormatting}
+          onChange={(v) => void window.speech.setPreference('smartFormatting', v)}
+        />
+      }
+    />
+  );
+}
+
+const PROVIDER_LABELS: Record<FormattingProvider, string> = {
+  ollama: 'On this Mac (Ollama)',
+  groq: 'Groq (your key)',
+  gemini: 'Gemini (your key)',
+};
+
+function FormattingProviderRow({ state }: { state: SharedState }) {
+  const f = state.formatting;
+  if (f.status === 'off') return null;
+  const [badge, tone]: [string, 'ok' | 'warn' | 'error' | 'muted'] = {
+    off: ['Off', 'muted'] as [string, 'muted'],
+    checking: ['Checking…', 'muted'] as [string, 'muted'],
+    ready: ['Ready', 'ok'] as [string, 'ok'],
+    no_server: ['Not running', 'warn'] as [string, 'warn'],
+    no_model: ['Model missing', 'warn'] as [string, 'warn'],
+    no_key: ['No key', 'warn'] as [string, 'warn'],
+  }[f.status];
+  const cloud = f.provider !== 'ollama' ? ' Your dictation, the app name and your dictionary words are sent to this service.' : '';
+  const description = `Model ${f.model}.${cloud}${f.detail ? ` ${f.detail}` : ''}${
+    f.status !== 'ready' && f.status !== 'checking' ? ' Until then, dictations are pasted unformatted.' : ''
+  }`;
+  return (
+    <Row
+      label="Formatting with"
+      description={description}
+      status={
+        <>
+          <Badge tone={tone}>{badge}</Badge>
+          <Select
+            label="Formatting with"
+            value={f.provider}
+            options={FORMATTING_PROVIDERS.map((p) => [p, PROVIDER_LABELS[p]])}
+            onChange={(v) => void window.speech.setPreference('formattingProvider', v as FormattingProvider)}
+          />
+        </>
+      }
+    />
+  );
+}
+
+/** Cómo acabó el formateo, en pocas palabras; null si no hay nada que decir. */
+function formatSummary(result: string | null, ms: number | null): string | null {
+  if (!result) return null;
+  if (result === 'formatted') return ms != null ? `formatted in ${(ms / 1000).toFixed(1)} s` : 'formatted';
+  if (result === 'off') return null;
+  const why: Record<string, string> = {
+    raw_timeout: 'took too long',
+    raw_not_ready: 'formatter not available',
+    raw_rejected: 'the result changed the meaning',
+    raw_auth: 'invalid key',
+    raw_quota: 'usage limit reached',
+    raw_network: 'no connection',
+    raw_failed: 'formatter error',
+  };
+  return `pasted unformatted (${why[result] ?? result.replace(/^raw_/, '')})`;
+}
+
 function RecentDictations({ state }: { state: SharedState }) {
   const [entries, setEntries] = useState<HistoryEntry[] | null>(null);
   const last = state.dictation.last;
@@ -388,17 +467,20 @@ function HistoryRow({ entry: e }: { entry: HistoryEntry }) {
     e.transcriptionMs != null ? `transcribed in ${(e.transcriptionMs / 1000).toFixed(1)} s` : null,
     e.model && isLocalModelId(e.model) ? LOCAL_MODELS[e.model].label : e.model,
     e.language,
+    formatSummary(e.formatResult, e.formatMs),
     e.pasteResult ? pasteSummary(e.pasteResult, e.appName, e.pasteMs) : null,
   ].filter(Boolean);
   const tone = e.status === 'done' ? 'ok' : e.status === 'failed' ? 'error' : 'muted';
   const label = { recording: 'Recording', processing: 'Transcribing', done: 'Done', cancelled: 'Cancelled', failed: 'Failed' }[
     e.status
   ];
-  const text = e.text ? e.text : e.status === 'done' ? 'No speech detected.' : (e.error ?? '');
+  const shown = e.formattedText ?? e.text;
+  const text = shown ? shown : e.status === 'done' ? 'No speech detected.' : (e.error ?? '');
   return (
     <div className="row history-row" data-row="history">
       <div className="row-text">
-        <div className={`history-text ${e.text ? '' : 'muted'}`}>{text}</div>
+        <div className={`history-text ${shown ? '' : 'muted'}`}>{text}</div>
+        {e.formattedText && e.text && e.formattedText !== e.text && <div className="row-description">Transcript: {e.text}</div>}
         <div className="row-description">{facts.join(' · ')}</div>
       </div>
       <div className="row-status">

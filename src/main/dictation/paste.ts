@@ -64,7 +64,16 @@ export class Paster {
     try {
       const res = await this.helper.request('CaptureTarget', { id }, CAPTURE_TIMEOUT_MS);
       const t = res.payload;
-      return typeof t.pid === 'number' ? { pid: t.pid, appName: t.appName ?? null, bundleId: t.bundleId ?? null } : null;
+      if (typeof t.pid !== 'number') return null;
+      const c = t.context;
+      const read = c && 'before' in c;
+      return {
+        pid: t.pid,
+        appName: t.appName ?? null,
+        bundleId: t.bundleId ?? null,
+        surroundings: read ? { before: c.before, after: c.after, selected: c.selected } : null,
+        surroundingsUnavailable: read ? null : c && 'unavailable' in c ? c.unavailable : 'not sent',
+      };
     } catch (err) {
       log.warn(`Could not capture the paste target: ${(err as Error).message}`);
       return null;

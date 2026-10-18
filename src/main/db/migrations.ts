@@ -80,4 +80,21 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE history ADD COLUMN paste_ms INTEGER;
     `,
   },
+  {
+    id: 5,
+    name: 'history-formatting',
+    // Cómo se formateó cada dictado (formatted_text ya existía).
+    // format_result: 'formatted'; 'off' si el formateo estaba apagado; o, si se
+    // pegó la transcripción sin formatear, el motivo: 'raw_timeout',
+    // 'raw_not_ready', 'raw_rejected', 'raw_failed'… format_error: el detalle
+    // de ese fallo. format_provider: 'ollama', 'groq' o 'gemini'; format_model:
+    // el modelo; format_ms: lo que tardó.
+    sql: `
+      ALTER TABLE history ADD COLUMN format_result TEXT;
+      ALTER TABLE history ADD COLUMN format_provider TEXT;
+      ALTER TABLE history ADD COLUMN format_model TEXT;
+      ALTER TABLE history ADD COLUMN format_ms INTEGER;
+      ALTER TABLE history ADD COLUMN format_error TEXT;
+    `,
+  },
 ];

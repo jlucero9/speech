@@ -1,5 +1,6 @@
 import type { WebContents } from 'electron';
 import { IPC } from '../shared/ipc';
+import { FORMATTING_MODELS } from '../shared/formatting';
 import { DEFAULT_PREFERENCES } from '../shared/preferences';
 import type { SharedState } from '../shared/state';
 import { DEFAULT_LOCAL_MODEL, LOCAL_MODELS } from '../shared/transcription';
@@ -82,6 +83,12 @@ export function initialState(): SharedState {
         retryAt: null,
       },
       transcriber: { status: 'stopped', pid: null, memoryBytes: null, unloadAt: null, error: null },
+    },
+    formatting: {
+      provider: DEFAULT_PREFERENCES.formattingProvider,
+      model: FORMATTING_MODELS[DEFAULT_PREFERENCES.formattingProvider],
+      status: 'checking',
+      detail: null,
     },
     data: { databaseReady: false, schemaVersion: 0, migrationsAppliedThisLaunch: 0, error: null },
     prefs: { ...DEFAULT_PREFERENCES },

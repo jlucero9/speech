@@ -45,6 +45,13 @@ constexpr double TRIM_MARGIN_S = 1.0;
 // ventana: lo que sobra conservaría lo del dictado anterior y se colaría en el
 // texto (frases de un dictado apareciendo en el siguiente).
 constexpr int TRIM_CTX_STEP = 256;
+// Tope de tokens por segmento con la ventana recortada, según la duración del
+// audio. En algunas frases cortas el decodificador no cierra el segmento y
+// sigue generando hasta su límite (~220 pasos por cada haz): 2 s perdidos para
+// un texto que ya estaba completo. Nadie dice más de 8 tokens por segundo; al
+// llegar al tope whisper fuerza una marca de tiempo y el texto no se pierde.
+constexpr double TRIM_MAX_TOKENS_PER_S = 8.0;
+constexpr int TRIM_MAX_TOKENS_BASE = 16;
 
 std::mutex out_mutex;
 
@@ -262,6 +269,7 @@ struct Worker {
       // texto con la ventana recortada; con ellas sabe dónde acaba.
       p.audio_ctx = trimmed_audio_ctx(pcm.size());
       p.no_timestamps = false;
+      p.max_tokens = int(TRIM_MAX_TOKENS_PER_S * double(pcm.size()) / SAMPLE_RATE) + TRIM_MAX_TOKENS_BASE;
     }
     return whisper_full(ctx, p, pcm.data(), int(pcm.size()));
   }

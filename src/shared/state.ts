@@ -2,6 +2,7 @@
 // una copia completa en cada cambio (es pequeño). Las ventanas no lo modifican
 // directamente: piden acciones por IPC (ver ipc.ts).
 
+import type { FormattingState } from './formatting';
 import type { FnUsage, HelperPasteResult } from './helper-protocol';
 import type { Preferences } from './preferences';
 import type { TranscriptionState } from './transcription';
@@ -84,6 +85,13 @@ export interface PasteInfo {
   ms: number | null;
 }
 
+export interface FormatInfo {
+  /** 'formatted', 'off' o 'raw_<motivo>' (se pegó la transcripción tal cual). */
+  result: string;
+  model: string | null;
+  ms: number | null;
+}
+
 export interface DictationResult {
   id: string;
   outcome: DictationOutcome;
@@ -93,8 +101,12 @@ export interface DictationResult {
   message: string;
   durationMs: number;
   file: string | null;
-  /** Texto transcrito, si se llegó a transcribir. */
+  /** Texto que se pegó (formateado y ajustado al campo), o el transcrito si no se llegó a pegar. */
   text: string | null;
+  /** Transcripción tal cual. */
+  rawText: string | null;
+  /** Cómo acabó el formateo; null si no se llegó a formatear. */
+  format: FormatInfo | null;
   /** Idioma del texto (el elegido o el detectado). */
   language: string | null;
   /** Desde que acabó la grabación hasta tener el texto. */
@@ -126,6 +138,7 @@ export interface SharedState {
   keyboard: KeyboardState;
   dictation: DictationState;
   transcription: TranscriptionState;
+  formatting: FormattingState;
   data: DataState;
   prefs: Preferences;
 }

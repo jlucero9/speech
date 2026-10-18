@@ -154,6 +154,8 @@ final class Paster: NSObject, NSPasteboardItemDataProvider {
         let pid = app.processIdentifier
         let axApp = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(axApp, Paster.axTimeout)
+        let started = Date()
+        TextContext.enableManualAccessibility(axApp, pid: pid)
         let target = PasteTarget(
             pid: pid,
             bundleId: app.bundleIdentifier,
@@ -165,11 +167,17 @@ final class Paster: NSObject, NSPasteboardItemDataProvider {
         targets.append((id, target))
         if targets.count > Paster.keptTargets { targets.removeFirst(targets.count - Paster.keptTargets) }
         let role = target.element.flatMap { Paster.string($0, kAXRoleAttribute) } ?? "none"
-        Log.info("Paste target: \(target.name ?? "?") (\(target.bundleId ?? "?"), pid \(pid)), focused \(role)")
+        let context = TextContext.read(target.element)
+        let ms = Int((Date().timeIntervalSince(started) * 1000).rounded())
+        // En el registro, solo cuánto texto se leyó: nunca el texto.
+        let read = (context["unavailable"] as? String).map { "text not read: \($0)" }
+            ?? "text read: \((context["before"] as? String)?.utf16.count ?? 0) before, \((context["after"] as? String)?.utf16.count ?? 0) after"
+        Log.info("Paste target: \(target.name ?? "?") (\(target.bundleId ?? "?"), pid \(pid)), focused \(role), \(read), \(ms) ms")
         return [
             "pid": Int(pid),
             "appName": orNull(target.name),
             "bundleId": orNull(target.bundleId),
+            "context": context,
         ]
     }
 
