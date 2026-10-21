@@ -1,8 +1,11 @@
-import { app, ipcMain, powerMonitor, shell } from 'electron';
+import { app, clipboard, dialog, ipcMain, powerMonitor, shell } from 'electron';
 import { mkdirSync } from 'node:fs';
+import { copyFile, readFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { IPC } from '../shared/ipc';
+import { HUB_EVENTS, IPC, type HubPage } from '../shared/ipc';
+import { shownText, type HistoryActionResult } from '../shared/history';
 import type { BarSound, NoticeAction } from '../shared/bar';
 import { isValidPreference, type Preferences } from '../shared/preferences';
 import { DEFAULT_SHORTCUTS } from '../shared/shortcuts';
@@ -15,8 +18,9 @@ import { Dictation } from './dictation/dictation';
 import { Paster } from './dictation/paste';
 import { ShortcutListener } from './dictation/shortcuts';
 import { HelperProcess } from './helper/helper-process';
+import { scheduleDaily } from './daily';
 import { History } from './history';
-import { openHub } from './hub-window';
+import { hubWindow, openHub, sendToHub } from './hub-window';
 import { appPids, KeyboardStatus } from './keyboard-status';
 import { logger } from './log';
 import { helperExecutable, transcriberExecutable } from './paths';
@@ -99,10 +103,26 @@ function main(): void {
   mkdirSync(recordingsDir, { recursive: true });
   const history = db ? new History(db, recordingsDir) : null;
   try {
-    history?.tidy();
+    history?.markInterrupted();
+    history?.purgeOldAudio();
   } catch (err) {
     log.error('Could not tidy the history', err);
   }
+  // Cada cambio se avisa al Hub, que vuelve a leer la lista. Varios seguidos, juntos.
+  let historyChangedTimer: NodeJS.Timeout | null = null;
+  history?.onChange(() => {
+    historyChangedTimer ??= setTimeout(() => {
+      historyChangedTimer = null;
+      sendToHub(HUB_EVENTS.historyChanged);
+    }, 30);
+  });
+  scheduleDaily(12, (resume) => powerMonitor.on('resume', resume), () => {
+    try {
+      history?.purgeOldAudio();
+    } catch (err) {
+      log.error('Could not delete old audio', err);
+    }
+  });
   const vocabulary = (): string[] => {
     if (!db) return [];
     try {
@@ -135,8 +155,8 @@ function main(): void {
 
   // Barra flotante: siempre viva; sus avisos y sonidos los decide main.
   let dictation: Dictation | null = null;
-  const showHub = (): void => {
-    openHub(() => {
+  const showHub = (page: HubPage = 'dictation'): void => {
+    openHub(page, () => {
       permissions.refreshMicrophone();
       void keyboard.refresh();
       // Ollama se arranca y se para por fuera: que el Hub no enseñe un estado viejo.
@@ -156,7 +176,10 @@ function main(): void {
         if (n.dictationId) void dictation?.recover(n.dictationId);
         break;
       case 'open_hub':
-        showHub();
+        showHub('settings');
+        break;
+      case 'open_history':
+        showHub('dictation');
         break;
       case 'open_microphone_settings':
         void shell.openExternal(MICROPHONE_SETTINGS_URL);
@@ -192,9 +215,9 @@ function main(): void {
           notices.show(notice.barHidden());
         },
       },
-      { label: 'Settings', click: showHub },
+      { label: 'Settings', click: () => showHub('settings') },
       { type: 'separator' },
-      { label: 'Transcript history', click: showHub },
+      { label: 'Transcript history', click: () => showHub('dictation') },
       { label: 'Paste last transcript', accelerator: 'Command+Control+V', click: () => dictation?.pasteLastFromMenu() },
     ],
   });
@@ -251,8 +274,8 @@ function main(): void {
     formatting.release('system sleep');
   });
 
-  createTray(showHub);
-  app.on('second-instance', showHub);
+  createTray(() => showHub());
+  app.on('second-instance', () => showHub());
   // Una app de la barra de menús sigue viva sin ventanas.
   app.on('window-all-closed', () => {});
 
@@ -278,7 +301,72 @@ function main(): void {
     if (file) shell.showItemInFolder(file);
   });
   ipcMain.handle(IPC.downloadModel, () => models.download());
-  ipcMain.handle(IPC.listHistory, (_e, limit: number) => history?.recent(Number(limit) || 20) ?? []);
+  // Historial (Hub)
+  const noHistory: HistoryActionResult = { ok: false, message: 'The history is not available.' };
+  ipcMain.handle(IPC.listHistory, (_e, q: unknown) => {
+    const query = (q ?? {}) as { limit?: unknown; search?: unknown };
+    if (!history) return { entries: [], more: false };
+    return history.list({
+      limit: Number(query.limit) || 50,
+      search: typeof query.search === 'string' ? query.search.slice(0, 200) : undefined,
+    });
+  });
+  ipcMain.handle(IPC.historyStats, () => history?.stats() ?? { totalWords: 0, wpm: null, streakDays: 0 });
+  ipcMain.handle(IPC.historyAudio, async (_e, id: unknown) => {
+    const file = history?.audioPath(String(id));
+    if (!file) return null;
+    try {
+      return new Uint8Array(await readFile(file));
+    } catch (err) {
+      log.warn(`Could not read ${file}: ${(err as Error).message}`);
+      return null;
+    }
+  });
+  ipcMain.handle(IPC.copyTranscript, (_e, id: unknown): HistoryActionResult => {
+    const entry = history?.get(String(id));
+    if (!entry) return noHistory;
+    const text = shownText(entry)?.trim();
+    if (!text) return { ok: false, message: 'Transcript is empty' };
+    clipboard.writeText(text);
+    return { ok: true };
+  });
+  ipcMain.handle(IPC.setShowFormatted, (_e, id: unknown, show: unknown) => {
+    history?.update(String(id), { showFormatted: show === true });
+  });
+  ipcMain.handle(IPC.setFlagged, (_e, id: unknown, flagged: unknown) => {
+    history?.update(String(id), { flagged: flagged === true });
+  });
+  ipcMain.handle(IPC.retryTranscript, (_e, id: unknown) => dictation?.retry(String(id)) ?? noHistory);
+  ipcMain.handle(IPC.deleteTranscript, (_e, id: unknown): HistoryActionResult => {
+    if (!history) return noHistory;
+    history.delete(String(id));
+    log.info(`Deleted dictation ${String(id).slice(0, 8)} from the history`);
+    return { ok: true };
+  });
+  ipcMain.handle(IPC.extractAudio, async (_e, id: unknown) => {
+    const entry = history?.get(String(id));
+    const file = entry ? history?.audioPath(entry.id) : null;
+    if (!entry || !file) return { ok: false, message: 'Cannot save the audio: it is no longer available (older than 14 days).' };
+    const stamp = new Date(entry.createdAt);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const name = `Speech ${stamp.getFullYear()}-${pad(stamp.getMonth() + 1)}-${pad(stamp.getDate())} at ${pad(stamp.getHours())}.${pad(stamp.getMinutes())}.${pad(stamp.getSeconds())}.wav`;
+    const options = {
+      title: 'Extract audio',
+      defaultPath: join(homedir(), 'Downloads', name),
+      filters: [{ name: 'WAV audio', extensions: ['wav'] }],
+    };
+    const win = hubWindow();
+    const r = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options);
+    if (r.canceled || !r.filePath) return { ok: true, saved: false };
+    try {
+      await copyFile(file, r.filePath);
+      log.info(`Extracted the audio of ${entry.id.slice(0, 8)}`);
+      return { ok: true, saved: true };
+    } catch (err) {
+      log.error(`Could not copy ${file}`, err);
+      return { ok: false, message: 'Could not save the audio.' };
+    }
+  });
 
   app.on('before-quit', () => {
     log.info('Quitting');

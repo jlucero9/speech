@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import type { BarSound } from '../../shared/bar';
 import type { PasteTargetInfo } from '../../shared/helper-protocol';
 import type { RecorderEvent } from '../../shared/ipc';
+import type { HistoryActionResult } from '../../shared/history';
 import type { DictationOutcome, DictationResult, DictationState, DictationStatus, FormatInfo, PasteInfo } from '../../shared/state';
 import { notice } from '../bar/notice-texts';
 import type { NewNotice } from '../bar/notices';
@@ -103,8 +104,10 @@ interface Session {
   stoppedAt: number | null;
   /** Hora a la que llegó todo el audio. */
   audioAt: number | null;
-  /** Dictado cancelado que se vuelve a transcribir desde su audio («Undo»): la fila ya existe. */
+  /** Dictado que se vuelve a transcribir desde su audio («Undo» o el Hub): la fila ya existe. */
   recovered: boolean;
+  /** Reintento desde el Hub: no se ve en la barra y Esc no lo cancela. */
+  background: boolean;
   /** Horas a las que sonó la app durante la grabación (el micrófono los recoge). */
   soundsAt: number[];
 }
@@ -128,6 +131,8 @@ export class Dictation {
   private levelTimer: NodeJS.Timeout | null = null;
   /** Transcripción o formateo en curso, para poder cancelarlos con Esc. */
   private transcribing: { id: string; abort: AbortController } | null = null;
+  /** Filas que se están reintentando desde el Hub. */
+  private retrying = new Set<string>();
 
   constructor(
     private readonly store: Store,
@@ -345,6 +350,7 @@ export class Dictation {
       stoppedAt: null,
       audioAt: null,
       recovered: false,
+      background: false,
       soundsAt: [],
     };
     this.current = s;
@@ -518,7 +524,7 @@ export class Dictation {
       };
     }
     const abort = new AbortController();
-    this.transcribing = { id: s.id, abort };
+    if (!s.background) this.transcribing = { id: s.id, abort };
     const base = { ...this.result(s, file), durationMs };
     try {
       const r = await this.engine.transcribe({
@@ -576,7 +582,7 @@ export class Dictation {
     const target = await s.target;
     const vocabulary = this.vocabulary();
     const abort = new AbortController();
-    this.transcribing = { id: s.id, abort };
+    if (!s.background) this.transcribing = { id: s.id, abort };
     try {
       const o = await this.formatting.format(
         {
@@ -709,16 +715,8 @@ export class Dictation {
       this.feedback.notify(notice.busy());
       return;
     }
-    const file = this.history?.audioPath(id) ?? null;
-    let wav: Buffer | null = null;
-    if (file) {
-      try {
-        wav = await readFile(file);
-      } catch (err) {
-        log.warn(`Could not read ${file}: ${(err as Error).message}`);
-      }
-    }
-    if (!file || !wav || wav.length <= WAV_HEADER_BYTES) {
+    const { file, wav } = await this.readAudio(id);
+    if (!file || !wav) {
       log.info(`Dictation ${short(id)}: nothing to recover`);
       this.feedback.notify(notice.nothingToRecover());
       return;
@@ -727,26 +725,7 @@ export class Dictation {
     const pcm = wav.subarray(WAV_HEADER_BYTES);
     const durationMs = Math.round(pcm.length / BYTES_PER_MS);
     const now = Date.now();
-    const s: Session = {
-      id,
-      startedAt: now,
-      openMs: null,
-      chunks: [],
-      bytes: pcm.length,
-      nextIndex: 0,
-      lost: 0,
-      pendingVolumes: [],
-      outcome: null,
-      reason: 'undo_cancel',
-      message: '',
-      keepAudio: false,
-      doneTimer: null,
-      target: this.paster.captureTarget(id),
-      stoppedAt: now,
-      audioAt: now,
-      recovered: true,
-      soundsAt: [],
-    };
+    const s = savedSession(id, now, pcm.length, this.paster.captureTarget(id), false);
     log.info(`Dictation ${short(id)}: recovering ${durationMs} ms of cancelled audio`);
     this.feedback.clearNotice();
     this.engine.prepare(this.store.get().prefs.dictationLanguage);
@@ -756,6 +735,61 @@ export class Dictation {
     if (result.outcome === 'done') result = await this.format(s, result);
     if (result.outcome === 'done') result = await this.paste(s, result);
     this.conclude(s, result);
+  }
+
+  /**
+   * «Retry transcript» del Hub: vuelve a transcribir y formatear el audio
+   * guardado de un dictado y reescribe su fila. No pega nada ni se ve en la
+   * barra. Sirve también para recuperar un dictado cancelado o fallido.
+   */
+  async retry(id: string): Promise<HistoryActionResult> {
+    if (this.state.status !== 'idle') return { ok: false, message: 'Cannot retry while dictating.' };
+    if (this.retrying.has(id)) return { ok: true };
+    const { file, wav } = await this.readAudio(id);
+    if (!file || !wav) {
+      return { ok: false, message: 'Cannot retry the transcription: its audio is no longer available (older than 14 days).' };
+    }
+    const pcm = wav.subarray(WAV_HEADER_BYTES);
+    const durationMs = Math.round(pcm.length / BYTES_PER_MS);
+    const s = savedSession(id, Date.now(), pcm.length, Promise.resolve(null), true);
+    log.info(`Dictation ${short(id)}: retrying ${durationMs} ms of audio from the history`);
+    this.retrying.add(id);
+    try {
+      this.formatting.prepare();
+      // El texto anterior deja de valer: la fila se rehace entera.
+      this.updateHistory(id, {
+        formattedText: null,
+        formatResult: null,
+        formatProvider: null,
+        formatModel: null,
+        formatMs: null,
+        formatError: null,
+        showFormatted: true,
+      });
+      let result = await this.transcribe(s, file, pcm, durationMs);
+      if (result.outcome === 'done') result = await this.format(s, result);
+      log.info(`Dictation ${short(id)}: retry ${result.outcome} (${result.reason})`);
+      return result.outcome === 'done' ? { ok: true } : { ok: false, message: 'Retry failed. Please try again.' };
+    } catch (err) {
+      log.error(`Dictation ${short(id)}: retry failed`, err);
+      this.updateHistory(id, { status: 'failed', error: `retry_failed: ${(err as Error).message}` });
+      return { ok: false, message: 'Retry failed. Please try again.' };
+    } finally {
+      this.retrying.delete(id);
+    }
+  }
+
+  /** El WAV guardado de un dictado, si sigue ahí y tiene audio. */
+  private async readAudio(id: string): Promise<{ file: string | null; wav: Buffer | null }> {
+    const file = this.history?.audioPath(id) ?? null;
+    if (!file) return { file: null, wav: null };
+    try {
+      const wav = await readFile(file);
+      return wav.length > WAV_HEADER_BYTES ? { file, wav } : { file, wav: null };
+    } catch (err) {
+      log.warn(`Could not read ${file}: ${(err as Error).message}`);
+      return { file, wav: null };
+    }
   }
 
   private copyLast(): void {
@@ -925,6 +959,31 @@ export class Dictation {
     if (this.levelTimer) clearInterval(this.levelTimer);
     this.noAudioTimer = this.warnTimer = this.maxTimer = this.levelTimer = null;
   }
+}
+
+/** Sesión para un dictado que ya está grabado y guardado en el historial. */
+function savedSession(id: string, now: number, bytes: number, target: Promise<PasteTargetInfo | null>, background: boolean): Session {
+  return {
+    id,
+    startedAt: now,
+    openMs: null,
+    chunks: [],
+    bytes,
+    nextIndex: 0,
+    lost: 0,
+    pendingVolumes: [],
+    outcome: null,
+    reason: background ? 'retry' : 'undo_cancel',
+    message: '',
+    keepAudio: false,
+    doneTimer: null,
+    target,
+    stoppedAt: now,
+    audioAt: now,
+    recovered: true,
+    background,
+    soundsAt: [],
+  };
 }
 
 function emptyResult(id: string): DictationResult {

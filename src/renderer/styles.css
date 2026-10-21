@@ -1,4 +1,4 @@
-/* Tokens de diseño: color, tipografía, espaciado y radios (tema claro). */
+/* Tokens de diseño (tema claro) y estilos de los ajustes provisionales. */
 
 @font-face {
   font-family: 'Figtree';
@@ -20,8 +20,15 @@
   --sand-600: #eeebe3;
   --sand-700: #c5c0b3;
   --sand-950: #4d4a42;
+  --vast-300: #b3b2ad;
   --vast-600: #71716e;
+  --vast-900: #30302f;
   --vast-950: #1a1a1a;
+  --glow-300: #ffa946;
+  --destructive-400: #f87171;
+  --destructive-500: #ee6a6a;
+  --destructive-700: #bc3d3d;
+  --shade-white: #ffffff;
 
   --background: var(--sand-50);
   --background-secondary: var(--sand-600);
@@ -62,37 +69,6 @@ html {
   line-height: 20px;
   user-select: none;
   cursor: default;
-}
-
-.window {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-}
-
-.titlebar {
-  height: 40px;
-  flex: none;
-  -webkit-app-region: drag;
-}
-
-.content {
-  flex: 1;
-  overflow-y: auto;
-  margin: 0 12px 12px;
-  padding: 28px 32px 32px;
-  background: var(--background);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-}
-
-.page-title {
-  font-family: EBGaramond, serif;
-  font-weight: 400;
-  font-size: 28px;
-  line-height: 28px;
-  letter-spacing: -0.04em;
-  margin: 0 0 24px;
 }
 
 .muted {

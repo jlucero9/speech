@@ -12,7 +12,8 @@ export type NoticeStatus = 'info' | 'alert' | 'error';
 
 export type NoticeAction =
   | 'undo_cancel' // vuelve a transcribir el audio de un dictado cancelado
-  | 'open_hub'
+  | 'open_hub' // abre el Hub con los ajustes (estado del modelo, del formateo…)
+  | 'open_history' // abre el Hub en el historial
   | 'open_microphone_settings'
   | 'show_bar'; // deshace «ocultar una hora»
 

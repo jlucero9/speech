@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { IPC, type SpeechApi } from '../shared/ipc';
+import { HUB_EVENTS, IPC, isHubPage, type SpeechApi } from '../shared/ipc';
 import type { SharedState } from '../shared/state';
 
 const api: SpeechApi = {
@@ -19,8 +19,28 @@ const api: SpeechApi = {
   openKeyboardSettings: () => ipcRenderer.invoke(IPC.openKeyboardSettings),
   revealRecording: (id) => ipcRenderer.invoke(IPC.revealRecording, id),
   downloadModel: () => ipcRenderer.invoke(IPC.downloadModel),
-  listHistory: (limit) => ipcRenderer.invoke(IPC.listHistory, limit),
   openMicrophoneSettings: () => ipcRenderer.invoke(IPC.openMicrophoneSettings),
+  onNavigate: (listener) => {
+    const handler = (_e: unknown, page: unknown) => {
+      if (isHubPage(page)) listener(page);
+    };
+    ipcRenderer.on(HUB_EVENTS.navigate, handler);
+    return () => ipcRenderer.removeListener(HUB_EVENTS.navigate, handler);
+  },
+  onHistoryChanged: (listener) => {
+    const handler = () => listener();
+    ipcRenderer.on(HUB_EVENTS.historyChanged, handler);
+    return () => ipcRenderer.removeListener(HUB_EVENTS.historyChanged, handler);
+  },
+  listHistory: (q) => ipcRenderer.invoke(IPC.listHistory, q),
+  historyStats: () => ipcRenderer.invoke(IPC.historyStats),
+  historyAudio: (id) => ipcRenderer.invoke(IPC.historyAudio, id),
+  copyTranscript: (id) => ipcRenderer.invoke(IPC.copyTranscript, id),
+  setShowFormatted: (id, show) => ipcRenderer.invoke(IPC.setShowFormatted, id, show),
+  setFlagged: (id, flagged) => ipcRenderer.invoke(IPC.setFlagged, id, flagged),
+  retryTranscript: (id) => ipcRenderer.invoke(IPC.retryTranscript, id),
+  deleteTranscript: (id) => ipcRenderer.invoke(IPC.deleteTranscript, id),
+  extractAudio: (id) => ipcRenderer.invoke(IPC.extractAudio, id),
 };
 
 contextBridge.exposeInMainWorld('speech', api);

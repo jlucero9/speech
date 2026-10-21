@@ -72,7 +72,7 @@ export const notice = {
       body: 'We noticed you cancelled your transcription',
       actions: [
         { action: 'undo_cancel', label: 'Undo' },
-        { action: 'open_hub', label: 'Open History' },
+        { action: 'open_history', label: 'Open History' },
       ],
       timeoutMs: 8_000,
       dictationId,
@@ -174,7 +174,7 @@ export const notice = {
       status: 'error',
       title: "Couldn't transcribe your dictation",
       body: message,
-      actions: [{ action: 'open_hub', label: 'Open History' }],
+      actions: [{ action: 'open_history', label: 'Open History' }],
       timeoutMs: 8_000,
       dictationId,
     };

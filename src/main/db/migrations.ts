@@ -97,4 +97,13 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE history ADD COLUMN format_error TEXT;
     `,
   },
+  {
+    id: 6,
+    name: 'history-flagged',
+    // Marca que el usuario pone a un dictado desde el historial (la bandera de
+    // la fila), para encontrarlo después.
+    sql: `
+      ALTER TABLE history ADD COLUMN flagged INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
 ];

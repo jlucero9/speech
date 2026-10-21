@@ -1,7 +1,5 @@
-// Datos de la transcripción que comparten main y la interfaz: modelos locales,
-// idiomas y entradas del historial.
-
-import type { PasteResult } from './state';
+// Datos de la transcripción que comparten main y la interfaz: modelos locales
+// e idiomas. El historial está en history.ts.
 
 /**
  * Modelos de whisper.cpp que la app sabe descargar. Solo uno: los más pequeños
@@ -103,35 +101,4 @@ export interface TranscriptionState {
   engine: 'local';
   model: ModelState;
   transcriber: TranscriberState;
-}
-
-export type HistoryStatus = 'recording' | 'processing' | 'done' | 'cancelled' | 'failed';
-
-/** Una fila del historial, tal como la ve la interfaz. */
-export interface HistoryEntry {
-  id: string;
-  createdAt: number;
-  status: HistoryStatus;
-  durationMs: number | null;
-  audioPath: string | null;
-  text: string | null;
-  language: string | null;
-  engine: string | null;
-  model: string | null;
-  transcriptionMs: number | null;
-  /** Texto que se envió a pegar. */
-  pastedText: string | null;
-  /** App en la que se pegó (o se intentó). */
-  appName: string | null;
-  pasteResult: PasteResult | null;
-  /** Desde soltar la tecla hasta que la app pidió el texto. */
-  pasteMs: number | null;
-  error: string | null;
-  /** Texto formateado; null si no se formateó. */
-  formattedText: string | null;
-  /** 'formatted', 'off' o 'raw_<motivo>' (se pegó la transcripción tal cual). */
-  formatResult: string | null;
-  formatModel: string | null;
-  formatMs: number | null;
-  formatError: string | null;
 }

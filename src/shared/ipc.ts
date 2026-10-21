@@ -4,7 +4,7 @@
 import type { BarSound, NoticeAction } from './bar';
 import type { Preferences } from './preferences';
 import type { SharedState } from './state';
-import type { HistoryEntry } from './transcription';
+import type { HistoryActionResult, HistoryPage, HistoryQuery, HistoryStats } from './history';
 
 export const IPC = {
   getState: 'state:get',
@@ -19,9 +19,32 @@ export const IPC = {
   openKeyboardSettings: 'settings:open-keyboard',
   revealRecording: 'dictation:reveal-recording',
   downloadModel: 'transcription:download-model',
-  listHistory: 'history:list',
   openMicrophoneSettings: 'permissions:open-microphone-settings',
+  listHistory: 'history:list',
+  historyStats: 'history:stats',
+  historyAudio: 'history:audio',
+  copyTranscript: 'history:copy',
+  setShowFormatted: 'history:set-show-formatted',
+  setFlagged: 'history:set-flagged',
+  retryTranscript: 'history:retry',
+  deleteTranscript: 'history:delete',
+  extractAudio: 'history:extract-audio',
 } as const;
+
+/** main → Hub. */
+export const HUB_EVENTS = {
+  /** El Hub debe enseñar esta página (HubPage). */
+  navigate: 'hub:navigate',
+  /** El historial cambió: hay que volver a leerlo. */
+  historyChanged: 'history:changed',
+} as const;
+
+/** Páginas del Hub. «settings» abre el diálogo de ajustes sobre la página actual. */
+export type HubPage = 'dictation' | 'dictionary' | 'settings';
+
+export function isHubPage(value: unknown): value is HubPage {
+  return value === 'dictation' || value === 'dictionary' || value === 'settings';
+}
 
 /** Canales de la barra flotante (preload/bar.ts), además de getState y stateChanged. */
 export const BAR_IPC = {
@@ -103,6 +126,21 @@ export interface SpeechApi {
   downloadModel(): Promise<void>;
   /** Abre Ajustes del Sistema en Privacidad › Micrófono. */
   openMicrophoneSettings(): Promise<void>;
-  /** Los últimos dictados, del más reciente al más antiguo. */
-  listHistory(limit: number): Promise<HistoryEntry[]>;
+  /** Devuelve la función para darse de baja. */
+  onNavigate(listener: (page: HubPage) => void): () => void;
+  /** Devuelve la función para darse de baja. */
+  onHistoryChanged(listener: () => void): () => void;
+  /** Dictados del más reciente al más antiguo. */
+  listHistory(q: HistoryQuery): Promise<HistoryPage>;
+  historyStats(): Promise<HistoryStats>;
+  /** El WAV de un dictado, o null si ya no está. */
+  historyAudio(id: string): Promise<Uint8Array | null>;
+  copyTranscript(id: string): Promise<HistoryActionResult>;
+  /** false: «Undo AI edit» (se enseña la transcripción); true: «Redo AI edit». */
+  setShowFormatted(id: string, show: boolean): Promise<void>;
+  setFlagged(id: string, flagged: boolean): Promise<void>;
+  retryTranscript(id: string): Promise<HistoryActionResult>;
+  deleteTranscript(id: string): Promise<HistoryActionResult>;
+  /** Pide dónde guardar el audio y lo copia allí. ok sin mensaje si se cancela. */
+  extractAudio(id: string): Promise<HistoryActionResult & { saved?: boolean }>;
 }
