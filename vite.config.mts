@@ -16,6 +16,8 @@ export default defineConfig({
     rollupOptions: {
       input: {
         hub: resolve(import.meta.dirname, 'src/renderer/index.html'),
+        // Barra flotante: siempre viva, en su propia ventana.
+        bar: resolve(import.meta.dirname, 'src/renderer/bar/index.html'),
         // Ventana oculta de grabación: sin React.
         recorder: resolve(import.meta.dirname, 'src/renderer/recorder/index.html'),
       },

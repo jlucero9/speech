@@ -137,17 +137,54 @@ final class Paster: NSObject, NSPasteboardItemDataProvider {
     /// `changeCount` tras escribir el texto: si cambia, alguien copió otra cosa.
     private var ownChangeCount: Int?
     private var restoreWork: DispatchWorkItem?
+    /// La última app ajena a Speech que pasó a primer plano. La barra flotante
+    /// no se activa al hacer clic, pero si Accesibilidad la diera por la app
+    /// con el foco, el texto iría a parar a Speech: se usa esta en su lugar.
+    private var lastExternalApp: NSRunningApplication?
+    private var activationObserver: NSObjectProtocol?
+
+    override init() {
+        super.init()
+        if let front = NSWorkspace.shared.frontmostApplication, !Paster.isOwn(front) { lastExternalApp = front }
+        activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+            if !Paster.isOwn(app) { self?.lastExternalApp = app }
+        }
+    }
+
+    /// Speech (el proceso que lanzó el helper, o cualquier app local.speech.*).
+    private static func isOwn(_ app: NSRunningApplication) -> Bool {
+        app.processIdentifier == getppid() || (app.bundleIdentifier?.hasPrefix("local.speech.") ?? false)
+    }
+
+    /// La app de delante, sin contar a Speech: la que dice Accesibilidad, la del
+    /// workspace o, si las dos son Speech, la última ajena que estuvo delante.
+    private func frontApp() -> NSRunningApplication? {
+        let workspace = NSWorkspace.shared.frontmostApplication
+        let live = Paster.frontPid().flatMap { NSRunningApplication(processIdentifier: $0) }
+        if live?.processIdentifier != workspace?.processIdentifier {
+            Log.warn("Frontmost app: workspace says \(workspace?.localizedName ?? "none") (\(workspace?.processIdentifier ?? 0)), accessibility says \(live?.localizedName ?? "none") (\(live?.processIdentifier ?? 0))")
+        }
+        for candidate in [live, workspace] {
+            guard let app = candidate else { continue }
+            if !Paster.isOwn(app) { return app }
+        }
+        if let app = lastExternalApp, !app.isTerminated {
+            Log.warn("Speech is in front; using the last other app in front, \(app.localizedName ?? "?")")
+            return app
+        }
+        return nil
+    }
 
     // MARK: Destino
 
     /// Anota la app de delante y su elemento con foco con la clave `id`.
     func captureTarget(id: String) -> [String: Any] {
-        let workspace = NSWorkspace.shared.frontmostApplication
-        let live = Paster.frontPid()
-        if live != workspace?.processIdentifier {
-            Log.warn("Frontmost app: workspace says \(workspace?.localizedName ?? "none") (\(workspace?.processIdentifier ?? 0)), accessibility says pid \(live ?? 0)")
-        }
-        guard let app = live.flatMap({ NSRunningApplication(processIdentifier: $0) }) ?? workspace else {
+        guard let app = frontApp() else {
             Log.warn("CaptureTarget: no frontmost app")
             return [:]
         }
@@ -197,7 +234,7 @@ final class Paster: NSObject, NSPasteboardItemDataProvider {
     private func start(id: String, text: String, targetId: String?, posted: @escaping ([String: Any]) -> Void) {
         let target = targetId.flatMap { id in targets.first { $0.id == id }?.target }
         if targetId != nil, target == nil { Log.warn("Paste target \(targetId!.prefix(8)) unknown; pasting where the focus is") }
-        let front = NSWorkspace.shared.frontmostApplication
+        let front = target == nil ? frontApp() : nil
         let p = ActivePaste(
             id: id,
             text: text,
@@ -409,9 +446,16 @@ final class Paster: NSObject, NSPasteboardItemDataProvider {
     /// Devuelve nil si el destino está delante (o no hay destino); si no, por qué no se pega.
     private func bringBack(_ target: PasteTarget?, done: @escaping (PasteResult?) -> Void) {
         guard let target else { return done(nil) }
-        guard let app = NSRunningApplication(processIdentifier: target.pid), !app.isTerminated else {
-            Log.warn("Paste target \(target.name ?? "?") has quit")
-            return done(.targetGone)
+        // La lista de apps del workspace puede no tener la app un momento
+        // aunque siga abierta: solo cuenta como cerrada si su proceso no existe.
+        let listed = NSRunningApplication(processIdentifier: target.pid)
+        let app = listed?.isTerminated == false ? listed : nil
+        if app == nil {
+            guard kill(target.pid, 0) == 0 else {
+                Log.warn("Paste target \(target.name ?? "?") has quit")
+                return done(.targetGone)
+            }
+            Log.warn("Paste target \(target.name ?? "?") is not listed as running (\(listed == nil ? "no entry" : "terminated")), but its process is alive")
         }
         let focusElement = {
             guard let element = target.element else { return }
@@ -434,7 +478,9 @@ final class Paster: NSObject, NSPasteboardItemDataProvider {
             AXUIElementPerformAction(window, kAXRaiseAction as CFString)
         }
         AXUIElementSetAttributeValue(axApp, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
-        if #available(macOS 14, *) { app.activate() } else { app.activate(options: []) }
+        if let app {
+            if #available(macOS 14, *) { app.activate() } else { app.activate(options: []) }
+        }
 
         let started = Date()
         func check() {

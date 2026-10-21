@@ -4,6 +4,8 @@ export const SAMPLE_RATE = 16_000;
 export const BYTES_PER_SAMPLE = 2;
 /** Bytes de audio por milisegundo a 16 kHz, mono, 16 bits. */
 export const BYTES_PER_MS = (SAMPLE_RATE * BYTES_PER_SAMPLE) / 1000;
+/** Cabecera de un WAV PCM como los que escribe wavFile. */
+export const WAV_HEADER_BYTES = 44;
 
 export function wavFile(pcm: Buffer, sampleRate = SAMPLE_RATE, channels = 1): Buffer {
   const header = Buffer.alloc(44);

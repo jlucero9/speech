@@ -15,6 +15,13 @@ const MIN_LEVEL_DB = -45;
 const ABOVE_FLOOR_DB = 12;
 /** Menos que esto no es una palabra. */
 export const MIN_SPEECH_MS = 150;
+/**
+ * Los sonidos de la app (empezar, manos libres) también llegan al micrófono
+ * y bastan para superar el umbral: no se cuenta lo grabado desde un poco
+ * antes de cada uno hasta que se apaga.
+ */
+const OWN_SOUND_BEFORE_MS = 50;
+const OWN_SOUND_AFTER_MS = 700;
 
 export interface VoiceCheck {
   speechMs: number;
@@ -23,12 +30,18 @@ export interface VoiceCheck {
   peakDb: number;
 }
 
-/** `pcm`: 16 bits con signo, mono, 16 kHz. */
-export function checkVoice(pcm: Buffer): VoiceCheck {
+/**
+ * `pcm`: 16 bits con signo, mono, 16 kHz. `ownSoundsMs`: cuándo sonó la app,
+ * en milisegundos desde el principio de la grabación.
+ */
+export function checkVoice(pcm: Buffer, ownSoundsMs: number[] = []): VoiceCheck {
   const aligned = pcm.byteOffset % 2 === 0 ? pcm : Buffer.from(pcm);
   const samples = new Int16Array(aligned.buffer, aligned.byteOffset, Math.floor(aligned.length / 2));
   const levels: number[] = [];
+  const ownSound = (ms: number): boolean =>
+    ownSoundsMs.some((t) => ms + FRAME_MS > t - OWN_SOUND_BEFORE_MS && ms < t + OWN_SOUND_AFTER_MS);
   for (let start = 0; start + FRAME_SAMPLES <= samples.length; start += FRAME_SAMPLES) {
+    if (ownSound((start / FRAME_SAMPLES) * FRAME_MS)) continue;
     let sum = 0;
     for (let i = start; i < start + FRAME_SAMPLES; i++) sum += samples[i] * samples[i];
     const rms = Math.sqrt(sum / FRAME_SAMPLES);

@@ -90,6 +90,7 @@ export function initialState(): SharedState {
       status: 'checking',
       detail: null,
     },
+    bar: { notice: null },
     data: { databaseReady: false, schemaVersion: 0, migrationsAppliedThisLaunch: 0, error: null },
     prefs: { ...DEFAULT_PREFERENCES },
   };

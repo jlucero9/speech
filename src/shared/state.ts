@@ -2,6 +2,7 @@
 // una copia completa en cada cambio (es pequeño). Las ventanas no lo modifican
 // directamente: piden acciones por IPC (ver ipc.ts).
 
+import type { BarState } from './bar';
 import type { FormattingState } from './formatting';
 import type { FnUsage, HelperPasteResult } from './helper-protocol';
 import type { Preferences } from './preferences';
@@ -139,6 +140,7 @@ export interface SharedState {
   dictation: DictationState;
   transcription: TranscriptionState;
   formatting: FormattingState;
+  bar: BarState;
   data: DataState;
   prefs: Preferences;
 }

@@ -1,14 +1,14 @@
-import { clipboard, Notification } from 'electron';
+import { clipboard } from 'electron';
 import type { PasteOutcomePayload, PasteTargetInfo } from '../../shared/helper-protocol';
 import type { PasteResult } from '../../shared/state';
 import type { HelperProcess } from '../helper/helper-process';
 import { logger } from '../log';
 
 // Pegado del texto, visto desde main. El trabajo lo hace el helper (guardar y
-// restaurar el portapapeles, ⌘V, saber si llegó); aquí se le pide, se espera
-// el resultado y, si no se pegó, se avisa una vez: el texto ya está en el
-// portapapeles para pegarlo a mano. Si el helper no responde, el texto se
-// escribe en el portapapeles desde main.
+// restaurar el portapapeles, ⌘V, saber si llegó); aquí se le pide y se espera
+// el resultado. Si no se pegó, el texto queda en el portapapeles para pegarlo
+// a mano y quien pidió el pegado avisa en la barra. Si el helper no responde,
+// el texto se escribe en el portapapeles desde main.
 
 const log = logger('paste');
 
@@ -43,11 +43,6 @@ interface Waiting {
 
 export class Paster {
   private waiting = new Map<string, Waiting>();
-  /**
-   * El último aviso. Hay que guardarlo: si el objeto se libera, Electron lo
-   * quita del Centro de notificaciones, a veces antes de que llegue a verse.
-   */
-  private notice: Notification | null = null;
 
   constructor(private readonly helper: HelperProcess) {
     helper.on('event', (e) => {
@@ -129,38 +124,23 @@ export class Paster {
     if (!w) return;
     this.waiting.delete(id);
     clearTimeout(w.timer);
-    const notice = failureNotice(o);
-    if (notice) this.notify(notice);
     w.resolve(o);
-  }
-
-  private notify(body: string): void {
-    if (!Notification.isSupported()) return;
-    this.notice?.close();
-    this.notice = new Notification({ title: "Couldn't paste your dictation", body, silent: true });
-    this.notice.show();
   }
 }
 
-/** Texto del aviso cuando el pegado no llegó; null si llegó. */
-function failureNotice(o: PasteOutcome): string | null {
-  const app = o.appName ?? 'The app';
-  const tail = 'The text is on your clipboard: press ⌘V to paste it.';
-  switch (o.result) {
+/** El texto no llegó a la app: queda en el portapapeles y hay que avisar. */
+export function isPasteFailure(result: PasteResult): boolean {
+  switch (result) {
     case 'pasted':
     case 'pasted_unverified':
     case 'pending':
     case 'empty':
-      return null;
+      return false;
     case 'not_requested':
-      return `${app} didn't take the text. Click in a text field first. ${tail}`;
     case 'unconfirmed':
-      return `Speech couldn't confirm the text reached ${o.appName ?? 'the app'}. ${tail}`;
     case 'target_gone':
-      return `${app} closed before the text was ready. ${tail}`;
     case 'focus_failed':
-      return `Speech couldn't switch back to ${o.appName ?? 'the app'}. ${tail}`;
     case 'failed':
-      return tail;
+      return true;
   }
 }

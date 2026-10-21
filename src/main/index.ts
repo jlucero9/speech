@@ -3,9 +3,13 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { IPC } from '../shared/ipc';
+import type { BarSound, NoticeAction } from '../shared/bar';
 import { isValidPreference, type Preferences } from '../shared/preferences';
 import { DEFAULT_SHORTCUTS } from '../shared/shortcuts';
 import { DEFAULT_LOCAL_MODEL, type ModelState } from '../shared/transcription';
+import { BarWindow } from './bar/bar-window';
+import { notice } from './bar/notice-texts';
+import { Notices } from './bar/notices';
 import { openDatabase } from './db';
 import { Dictation } from './dictation/dictation';
 import { Paster } from './dictation/paste';
@@ -26,6 +30,9 @@ import { ModelManager } from './transcription/models';
 import { createTray, setTrayStatus, setTrayWarning } from './tray';
 
 const log = logger('main');
+
+const MICROPHONE_SETTINGS_URL = 'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone';
+const HIDE_BAR_MS = 60 * 60_000;
 
 app.setName('Speech');
 // El servicio de audio de Chromium va por defecto en un proceso propio que,
@@ -52,6 +59,12 @@ function main(): void {
   const prefsPath = join(dataDir, 'preferences.json');
   const prefs = loadPreferences(prefsPath);
   store.update((s) => ({ ...s, prefs }));
+  const setPreference = <K extends keyof Preferences>(key: K, value: Preferences[K]): void => {
+    const next = { ...store.get().prefs, [key]: value };
+    savePreferences(prefsPath, next);
+    store.update((s) => ({ ...s, prefs: next }));
+    log.info(`Preference ${key} = ${JSON.stringify(value)}`);
+  };
 
   // Base de datos
   let db: DatabaseSync | null = null;
@@ -119,7 +132,95 @@ function main(): void {
   // Formateo: Ollama en el equipo por defecto; si no responde, se pega la transcripción.
   const formatting = new TextFormatting(store);
   void formatting.check();
-  const dictation = new Dictation(
+
+  // Barra flotante: siempre viva; sus avisos y sonidos los decide main.
+  let dictation: Dictation | null = null;
+  const showHub = (): void => {
+    openHub(() => {
+      permissions.refreshMicrophone();
+      void keyboard.refresh();
+      // Ollama se arranca y se para por fuera: que el Hub no enseñe un estado viejo.
+      void formatting.check();
+    });
+  };
+  const playSound = (sound: BarSound): void => {
+    if (store.get().prefs.enableSounds) bar.sound(sound);
+  };
+  const notices = new Notices(store, playSound);
+  const runNoticeAction = (id: number, action: NoticeAction): void => {
+    const n = notices.current;
+    if (n?.id !== id) return;
+    notices.close(id, `action ${action}`);
+    switch (action) {
+      case 'undo_cancel':
+        if (n.dictationId) void dictation?.recover(n.dictationId);
+        break;
+      case 'open_hub':
+        showHub();
+        break;
+      case 'open_microphone_settings':
+        void shell.openExternal(MICROPHONE_SETTINGS_URL);
+        break;
+      case 'show_bar':
+        setPreference('barHiddenUntil', 0);
+        break;
+    }
+  };
+  const bar = new BarWindow(store.get().prefs.barEdge, {
+    command: (c) => {
+      switch (c.type) {
+        case 'start':
+          return dictation?.startFromBar();
+        case 'stop':
+          return dictation?.stopFromBar();
+        case 'cancel':
+          return dictation?.cancelFromBar();
+        case 'notice-action':
+          return runNoticeAction(c.id, c.action);
+        case 'notice-closed':
+          return notices.close(c.id, c.why);
+      }
+    },
+    dropped: (edge) => {
+      if (edge !== store.get().prefs.barEdge) setPreference('barEdge', edge);
+    },
+    menu: () => [
+      {
+        label: 'Hide for 1 hour',
+        click: () => {
+          setPreference('barHiddenUntil', Date.now() + HIDE_BAR_MS);
+          notices.show(notice.barHidden());
+        },
+      },
+      { label: 'Settings', click: showHub },
+      { type: 'separator' },
+      { label: 'Transcript history', click: showHub },
+      { label: 'Paste last transcript', accelerator: 'Command+Control+V', click: () => dictation?.pasteLastFromMenu() },
+    ],
+  });
+  bar.create();
+  // Al cambiar el borde, la ventana cambia de forma; al ocultarla una hora, vuelve sola.
+  let hideTimer: NodeJS.Timeout | null = null;
+  const syncBarPrefs = (p: Preferences): void => {
+    bar.setEdge(p.barEdge);
+    if (hideTimer) clearTimeout(hideTimer);
+    hideTimer = null;
+    if (p.barHiddenUntil > 0) {
+      const left = p.barHiddenUntil - Date.now();
+      if (left <= 0) setPreference('barHiddenUntil', 0);
+      else hideTimer = setTimeout(() => setPreference('barHiddenUntil', 0), left);
+    }
+  };
+  let lastPrefs = store.get().prefs;
+  syncBarPrefs(lastPrefs);
+  store.subscribe((s) => {
+    if (s.prefs === lastPrefs) return;
+    const changed = s.prefs.barEdge !== lastPrefs.barEdge || s.prefs.barHiddenUntil !== lastPrefs.barHiddenUntil;
+    lastPrefs = s.prefs;
+    if (changed) syncBarPrefs(s.prefs);
+  });
+
+  dictation = new Dictation(
     store,
     helper,
     recorder,
@@ -131,6 +232,15 @@ function main(): void {
     vocabulary,
     paster,
     formatting,
+    {
+      sound: playSound,
+      notify: (n) => notices.show(n),
+      clearNotice: () => {
+        const n = notices.current;
+        if (n) notices.close(n.id, 'new dictation');
+      },
+      followCursor: () => bar.followCursor(),
+    },
   );
 
   helper.start();
@@ -141,14 +251,6 @@ function main(): void {
     formatting.release('system sleep');
   });
 
-  const showHub = (): void => {
-    openHub(() => {
-      permissions.refreshMicrophone();
-      void keyboard.refresh();
-      // Ollama se arranca y se para por fuera: que el Hub no enseñe un estado viejo.
-      void formatting.check();
-    });
-  };
   createTray(showHub);
   app.on('second-instance', showHub);
   // Una app de la barra de menús sigue viva sin ventanas.
@@ -161,14 +263,12 @@ function main(): void {
   });
   ipcMain.handle(IPC.setPreference, (_e, key: keyof Preferences, value: unknown) => {
     if (!isValidPreference(key, value)) throw new Error(`Invalid preference ${String(key)}`);
-    const next = { ...store.get().prefs, [key]: value };
-    savePreferences(prefsPath, next);
-    store.update((s) => ({ ...s, prefs: next }));
-    log.info(`Preference ${key} = ${JSON.stringify(value)}`);
+    setPreference(key, value);
   });
   ipcMain.handle(IPC.requestAccessibility, () => permissions.requestAccessibility());
   ipcMain.handle(IPC.requestMicrophone, () => permissions.requestMicrophone());
   ipcMain.handle(IPC.openAccessibilitySettings, () => permissions.openAccessibilitySettings());
+  ipcMain.handle(IPC.openMicrophoneSettings, () => shell.openExternal(MICROPHONE_SETTINGS_URL));
   ipcMain.handle(IPC.retryHelper, () => helper.retry());
   ipcMain.handle(IPC.requestInputMonitoring, () => keyboard.requestInputMonitoring());
   ipcMain.handle(IPC.openInputMonitoringSettings, () => keyboard.openInputMonitoringSettings());
@@ -184,6 +284,7 @@ function main(): void {
     log.info('Quitting');
     helper.stop();
     recorder.shutdown();
+    bar.shutdown();
     models.stop();
     engine.release('quitting');
     formatting.release('quitting');
@@ -199,6 +300,8 @@ function main(): void {
       permissions,
       keyboard,
       recorder,
+      bar,
+      notices,
       shortcuts,
       paster,
       dictation,

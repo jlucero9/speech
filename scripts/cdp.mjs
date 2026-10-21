@@ -2,20 +2,18 @@
 //   node scripts/cdp.mjs main "speechDebug.store.get().helper"
 //   node scripts/cdp.mjs window "document.body.innerText"
 //   node scripts/cdp.mjs recorder "navigator.mediaDevices.enumerateDevices()"
+//   node scripts/cdp.mjs bar "document.querySelector('.pill').dataset.state"
 // Solo para comprobaciones durante el desarrollo.
 const [destino, expresion] = process.argv.slice(2);
-if (!['main', 'window', 'recorder'].includes(destino) || !expresion) {
-  console.error('Uso: node scripts/cdp.mjs main|window|recorder "<expresión>"');
+if (!['main', 'window', 'recorder', 'bar'].includes(destino) || !expresion) {
+  console.error('Uso: node scripts/cdp.mjs main|window|recorder|bar "<expresión>"');
   process.exit(2);
 }
 const puerto = destino === 'main' ? 9339 : 9338;
 const objetivos = await (await fetch(`http://127.0.0.1:${puerto}/json/list`)).json();
-// La ventana de grabación está siempre; «window» es la otra.
-const esGrabacion = (t) => t.url.includes('/recorder/');
-const objetivo =
-  destino === 'main'
-    ? objetivos[0]
-    : objetivos.find((t) => t.type === 'page' && (destino === 'recorder') === esGrabacion(t));
+// La grabación y la barra están siempre; «window» es la ventana del Hub.
+const clase = (t) => (t.url.includes('/recorder/') ? 'recorder' : t.url.includes('/bar/') ? 'bar' : 'window');
+const objetivo = destino === 'main' ? objetivos[0] : objetivos.find((t) => t.type === 'page' && clase(t) === destino);
 if (!objetivo) {
   console.error(`No hay ${destino === 'main' ? 'proceso main' : destino} en el puerto ${puerto}`);
   process.exit(1);

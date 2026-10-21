@@ -20,6 +20,7 @@ const api: SpeechApi = {
   revealRecording: (id) => ipcRenderer.invoke(IPC.revealRecording, id),
   downloadModel: () => ipcRenderer.invoke(IPC.downloadModel),
   listHistory: (limit) => ipcRenderer.invoke(IPC.listHistory, limit),
+  openMicrophoneSettings: () => ipcRenderer.invoke(IPC.openMicrophoneSettings),
 };
 
 contextBridge.exposeInMainWorld('speech', api);

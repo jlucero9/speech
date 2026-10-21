@@ -1,10 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import type { BarSound } from '../../shared/bar';
 import type { PasteTargetInfo } from '../../shared/helper-protocol';
 import type { RecorderEvent } from '../../shared/ipc';
 import type { DictationOutcome, DictationResult, DictationState, DictationStatus, FormatInfo, PasteInfo } from '../../shared/state';
+import { notice } from '../bar/notice-texts';
+import type { NewNotice } from '../bar/notices';
 import { FormatError } from '../formatting/formatter';
 import type { TextFormatting } from '../formatting/service';
 import { fitToSurroundings } from '../formatting/surroundings';
@@ -15,10 +18,10 @@ import type { Permissions } from '../permissions';
 import type { RecorderWindow } from '../recorder-window';
 import type { Store } from '../store';
 import { TranscriptionError, type TranscriptionEngine } from '../transcription/engine';
-import type { PasteOutcome, Paster } from './paste';
+import { isPasteFailure, type PasteOutcome, type Paster } from './paste';
 import type { ShortcutListener } from './shortcuts';
 import { checkVoice, MIN_SPEECH_MS } from './voice';
-import { BYTES_PER_MS, wavFile } from './wav';
+import { BYTES_PER_MS, WAV_HEADER_BYTES, wavFile } from './wav';
 
 // Máquina de estados del dictado:
 //
@@ -32,6 +35,12 @@ import { BYTES_PER_MS, wavFile } from './wav';
 //   si no llega, se descarta (un toque corto nunca produce un dictado).
 // - Segunda pulsación a menos de 500 ms del arranque: manos libres; la
 //   siguiente pulsación lo para. Una tercera dentro de la ventana cancela.
+//
+// Manos libres también con su atajo (fn + Espacio) y con la barra:
+// - Sin dictado, arranca en manos libres.
+// - Con un push-to-talk en curso, lo convierte sin reiniciarlo.
+// - En manos libres, para si han pasado 500 ms desde el arranque y, si no,
+//   cancela (la barra siempre para).
 // - Otra tecla pulsada con fn en el primer segundo (fn + ← para ir al
 //   principio, por ejemplo): no era un dictado, se descarta.
 //
@@ -43,6 +52,9 @@ import { BYTES_PER_MS, wavFile } from './wav';
 // qué texto lo rodea: el texto se pega ahí aunque el usuario cambie de app
 // mientras se procesa, con los espacios que pida lo que ya hay escrito. El dictado vuelve a «idle» al enviar
 // el ⌘V; el resultado del pegado llega después y completa la fila.
+//
+// Lo que el usuario debe saber (no se pudo pegar, se pegó sin formato, falta
+// el micrófono o el modelo…) se avisa en la barra, con su sonido.
 
 const log = logger('dictation');
 
@@ -59,6 +71,16 @@ const MIN_KEEP_BYTES = 16_000;
 const LEVEL_FLOOR_DB = -60;
 
 type CancelKind = 'user' | 'discard' | 'failure';
+
+/** Lo que el dictado cuenta a la barra: sonidos y avisos. */
+export interface DictationFeedback {
+  sound(sound: BarSound): void;
+  notify(n: NewNotice): void;
+  /** Cierra el aviso que se ve, sea cual sea. */
+  clearNotice(): void;
+  /** Al empezar a dictar: la barra pasa a la pantalla donde está el cursor. */
+  followCursor(): void;
+}
 
 interface Session {
   id: string;
@@ -81,6 +103,10 @@ interface Session {
   stoppedAt: number | null;
   /** Hora a la que llegó todo el audio. */
   audioAt: number | null;
+  /** Dictado cancelado que se vuelve a transcribir desde su audio («Undo»): la fila ya existe. */
+  recovered: boolean;
+  /** Horas a las que sonó la app durante la grabación (el micrófono los recoge). */
+  soundsAt: number[];
 }
 
 export class Dictation {
@@ -88,6 +114,13 @@ export class Dictation {
   /** Dictados parados o cancelados que esperan sus últimos trozos. */
   private closing = new Map<string, Session>();
   private lastActionAt = 0;
+  /** Último aviso de «aún procesando». */
+  private lastBusyAt = 0;
+  /**
+   * La pulsación de fn en curso terminó un dictado en manos libres: el
+   * Espacio de fn + Espacio que llega después no debe empezar otro.
+   */
+  private pressEndedDictation = false;
   private releaseTimer: NodeJS.Timeout | null = null;
   private noAudioTimer: NodeJS.Timeout | null = null;
   private warnTimer: NodeJS.Timeout | null = null;
@@ -108,13 +141,16 @@ export class Dictation {
     private readonly vocabulary: () => string[],
     private readonly paster: Paster,
     private readonly formatting: TextFormatting,
+    private readonly feedback: DictationFeedback,
   ) {
     mkdirSync(recordingsDir, { recursive: true });
     shortcuts.on('down', (action) => {
       if (action === 'ptt') this.pttDown();
+      else if (action === 'hands_free') this.handsFreeToggle('shortcut');
       else if (action === 'dismiss') this.dismiss();
     });
     shortcuts.on('up', (action) => {
+      if (action === 'ptt' || action === 'hands_free') this.pressEndedDictation = false;
       if (action === 'ptt') this.pttUp();
       else if (action === 'paste_last') this.pasteLast();
       else if (action === 'copy_last') this.copyLast();
@@ -142,26 +178,30 @@ export class Dictation {
     const now = Date.now();
     const status = this.state.status;
     if (status === 'stopping' || status === 'processing') {
-      if (now - this.lastActionAt > DEBOUNCE_MS) log.info('Ignoring shortcut: previous dictation is still finishing');
+      this.busy(now);
       return;
     }
     this.lastActionAt = now;
+    this.pressEndedDictation = false;
     const s = this.current;
     if (!this.active || !s) {
-      this.start();
+      this.start(false);
       return;
     }
     if (now - s.startedAt < DEBOUNCE_MS) {
       if (this.state.handsFree) {
+        this.pressEndedDictation = true;
         this.cancel('debounce_triple_press', 'discard', 'Cancelled by a third press.');
       } else {
         log.info(`Dictation ${short(s.id)}: pressed twice quickly → hands-free`);
-        this.clearReleaseTimer();
-        this.patch({ handsFree: true });
+        this.lock();
       }
       return;
     }
-    if (this.state.handsFree) this.stop('hands_free_stop');
+    if (this.state.handsFree) {
+      this.pressEndedDictation = true;
+      this.stop('hands_free_stop');
+    }
   }
 
   private pttUp(): void {
@@ -180,6 +220,7 @@ export class Dictation {
       if (this.current === s && this.active && !this.state.handsFree) {
         log.info(`Dictation ${short(s.id)}: short tap and no second press`);
         this.cancel('debounce_ptt', 'discard', 'Too short. Hold fn while you speak.');
+        this.feedback.notify(notice.shortTap());
       }
     }, DEBOUNCE_MS);
   }
@@ -190,6 +231,70 @@ export class Dictation {
     if (Date.now() - s.startedAt < CHORD_CANCEL_MS) {
       this.cancel('other_shortcut', 'discard', 'Another key was pressed with fn.');
     }
+  }
+
+  /** Atajo de manos libres o botones de la barra. */
+  private handsFreeToggle(source: 'shortcut' | 'bar'): void {
+    const now = Date.now();
+    if (source === 'shortcut' && this.pressEndedDictation) {
+      log.info('Ignoring hands-free shortcut: its fn press already ended the dictation');
+      return;
+    }
+    const status = this.state.status;
+    if (status === 'stopping' || status === 'processing') {
+      this.busy(now);
+      return;
+    }
+    this.lastActionAt = now;
+    const s = this.current;
+    if (!this.active || !s) {
+      this.start(true);
+      return;
+    }
+    if (!this.state.handsFree) {
+      log.info(`Dictation ${short(s.id)}: hands-free ${source} while holding → hands-free`);
+      this.lock();
+      return;
+    }
+    if (source === 'bar' || now - s.startedAt >= DEBOUNCE_MS) this.stop('hands_free_stop');
+    else this.cancel('debounce_popo', 'discard', 'Started and stopped too quickly.');
+  }
+
+  /** Pasa el dictado en curso a manos libres. */
+  private lock(): void {
+    this.clearReleaseTimer();
+    this.patch({ handsFree: true });
+    if (this.current) this.sound(this.current, 'lock');
+  }
+
+  /** Un sonido durante la grabación: se anota para que no cuente como voz. */
+  private sound(s: Session, sound: BarSound): void {
+    this.feedback.sound(sound);
+    if (this.store.get().prefs.enableSounds) s.soundsAt.push(Date.now());
+  }
+
+  /** Se pulsó el atajo con el dictado anterior aún terminando. */
+  private busy(now: number): void {
+    // fn + Espacio son dos pulsaciones: un solo aviso.
+    if (now - this.lastActionAt <= DEBOUNCE_MS || now - this.lastBusyAt <= DEBOUNCE_MS) return;
+    this.lastBusyAt = now;
+    log.info('Ignoring shortcut: previous dictation is still finishing');
+    this.feedback.notify(notice.busy());
+  }
+
+  // MARK: Barra
+
+  /** Clic en la píldora en reposo: dictado en manos libres. */
+  startFromBar(): void {
+    if (this.state.status === 'idle') this.handsFreeToggle('bar');
+  }
+
+  stopFromBar(): void {
+    if (this.active && this.state.handsFree) this.handsFreeToggle('bar');
+  }
+
+  cancelFromBar(): void {
+    if (this.active || this.state.status === 'stopping') this.cancel('user_action_cancel_button', 'user', 'Cancelled.');
   }
 
   private dismiss(): void {
@@ -204,14 +309,20 @@ export class Dictation {
 
   // MARK: Ciclo de vida
 
-  private start(): void {
+  private start(handsFree: boolean): void {
+    this.feedback.clearNotice();
     if (this.helper.current.status !== 'ready') {
-      this.fail('helper_not_ready', 'The Speech helper is not running.');
+      this.fail('helper_not_ready', 'The Speech helper is not running.', notice.helperNotReady());
       return;
     }
     const mic = this.permissions.refreshMicrophone();
     if (mic !== 'granted') {
-      this.fail('microphone_permission', 'Speech is not allowed to use the microphone.');
+      this.fail('microphone_permission', 'Speech is not allowed to use the microphone.', notice.microphonePermission());
+      return;
+    }
+    const model = this.store.get().transcription.model;
+    if (model.status !== 'ready') {
+      this.fail('model_not_ready', `The speech model is not ready (${model.status}).`, notice.modelNotReady(model));
       return;
     }
 
@@ -233,15 +344,19 @@ export class Dictation {
       target: this.paster.captureTarget(randomId),
       stoppedAt: null,
       audioAt: null,
+      recovered: false,
+      soundsAt: [],
     };
     this.current = s;
-    this.setStatus('initializing', 'ptt', {
+    this.feedback.followCursor();
+    this.setStatus('initializing', handsFree ? 'hands-free' : 'ptt', {
       id: s.id,
       startedAt: s.startedAt,
-      handsFree: false,
+      handsFree,
       level: 0,
       micSilent: false,
     });
+    this.sound(s, handsFree ? 'lock' : 'start');
     this.recorder.start(s.id);
     this.engine.prepare(this.store.get().prefs.dictationLanguage);
     this.formatting.prepare();
@@ -252,10 +367,14 @@ export class Dictation {
       }
     }, NO_AUDIO_MS);
     this.warnTimer = setTimeout(() => {
-      if (this.current === s) log.warn(`Dictation ${short(s.id)}: one minute left before the time limit`);
+      if (this.current !== s) return;
+      log.warn(`Dictation ${short(s.id)}: one minute left before the time limit`);
+      this.feedback.notify(notice.durationWarning());
     }, WARN_DURATION_MS);
     this.maxTimer = setTimeout(() => {
-      if (this.current === s) this.stop('max_duration');
+      if (this.current !== s) return;
+      this.stop('max_duration');
+      this.feedback.notify(notice.maxDuration());
     }, MAX_DURATION_MS);
     this.levelTimer = setInterval(() => this.updateLevel(), LEVEL_EVERY_MS);
   }
@@ -282,11 +401,14 @@ export class Dictation {
     s.message = message;
     s.keepAudio = kind === 'user';
     this.setStatus('idle', reason, { handsFree: false, level: 0, last: this.result(s, null) });
+    if (kind === 'user') this.feedback.notify(notice.cancelled(s.id));
+    else if (kind === 'failure') this.feedback.notify(notice.recordingFailed(message, s.id));
   }
 
-  private fail(reason: string, message: string): void {
+  private fail(reason: string, message: string, n: NewNotice): void {
     log.warn(`Dictation not started: ${reason}`);
     this.patch({ last: { ...emptyResult(randomUUID()), outcome: 'failed', reason, message } });
+    this.feedback.notify(n);
   }
 
   /** Suelta el dictado activo: deja de contar como «en curso». */
@@ -331,7 +453,10 @@ export class Dictation {
       return;
     }
 
-    if (shown) this.setStatus('processing', 'audio complete');
+    if (shown) {
+      this.setStatus('processing', 'audio complete');
+      this.feedback.sound('stop');
+    }
     let result: DictationResult;
     if (pcm.length === 0) {
       result = { ...this.result(s, null), outcome: 'discarded', reason: 'no_audio', message: 'No audio was recorded.' };
@@ -343,17 +468,37 @@ export class Dictation {
       if (result.outcome === 'done') result = await this.format(s, result);
       if (result.outcome === 'done') result = await this.paste(s, result);
     }
+    this.conclude(s, result);
+  }
+
+  /** Muestra el resultado y avisa de lo que haya salido mal. */
+  private conclude(s: Session, result: DictationResult): void {
     if (this.state.id === s.id) {
       this.setStatus('idle', result.reason, { handsFree: false, level: 0, last: result });
     } else {
       this.patch({ last: result });
     }
+    if (result.outcome === 'cancelled' && result.reason === 'user_action_escape') {
+      this.feedback.notify(notice.cancelled(s.id));
+    } else if (result.outcome === 'failed') {
+      const n = result.reason.startsWith('transcription_')
+        ? notice.transcriptionFailed(result.message, s.id)
+        : notice.recordingFailed(result.message, s.id);
+      this.feedback.notify(n);
+    } else if (result.outcome === 'done' && result.reason === 'no_speech') {
+      this.feedback.notify(notice.noSpeech(s.id));
+    } else if (result.outcome === 'done' && result.format?.result.startsWith('raw_')) {
+      // Si el pegado falla, su aviso sustituirá a este al llegar el resultado.
+      this.feedback.notify(notice.formatFallback(result.format.result, this.store.get().formatting, s.id));
+    }
   }
 
   private async transcribe(s: Session, file: string, pcm: Buffer, durationMs: number): Promise<DictationResult> {
     const language = this.store.get().prefs.dictationLanguage;
-    this.record(s, durationMs, file, 'processing', { language });
-    const voice = checkVoice(pcm);
+    if (s.recovered) this.updateHistory(s.id, { status: 'processing', language, error: null });
+    else this.record(s, durationMs, file, 'processing', { language });
+    const audioStart = s.startedAt + (s.openMs ?? 0);
+    const voice = checkVoice(pcm, s.soundsAt.map((t) => t - audioStart));
     if (voice.speechMs < MIN_SPEECH_MS) {
       // Sin voz, whisper se inventaría una frase: ni se transcribe ni se pega.
       log.info(
@@ -411,7 +556,7 @@ export class Dictation {
         ...base,
         outcome: cancelled ? 'cancelled' : 'failed',
         reason: cancelled ? 'user_action_escape' : `transcription_${e.code}`,
-        message: cancelled ? 'Cancelled. The audio is kept in your history.' : `${e.message} The audio is kept in your history.`,
+        message: cancelled ? 'Cancelled. The audio is kept in your history.' : `${e.message.replace(/[^.!?]$/, '$&.')} The audio is kept in your history.`,
       };
     } finally {
       if (this.transcribing?.abort === abort) this.transcribing = null;
@@ -529,7 +674,13 @@ export class Dictation {
     const info: PasteInfo = { result: o.result, appName: o.appName, ms };
     const last = this.state.last;
     if (last?.id === s.id) this.patch({ last: { ...last, paste: { ...info, appName: o.appName ?? last.paste?.appName ?? null } } });
+    if (isPasteFailure(o.result)) this.feedback.notify(notice.pasteFailed(s.id));
     return info;
+  }
+
+  /** «Paste last transcript» del menú de la barra. */
+  pasteLastFromMenu(): void {
+    this.pasteLast();
   }
 
   /** Atajo «pegar el último dictado»: donde esté el foco ahora. */
@@ -542,7 +693,69 @@ export class Dictation {
     const id = randomUUID();
     log.info(`Paste last: pasting ${text.length} chars (${short(id)})`);
     const job = this.paster.paste(id, text, null);
-    void job.outcome.then((o) => log.info(`Paste last ${short(id)}: ${o.result} in ${o.appName ?? '?'}`));
+    void job.outcome.then((o) => {
+      log.info(`Paste last ${short(id)}: ${o.result} in ${o.appName ?? '?'}`);
+      if (isPasteFailure(o.result)) this.feedback.notify(notice.pasteFailed(null));
+    });
+  }
+
+  /**
+   * «Undo» del aviso de cancelación: vuelve a transcribir el audio guardado
+   * del dictado cancelado, lo formatea y lo pega donde esté el foco ahora. La
+   * fila del historial es la misma.
+   */
+  async recover(id: string): Promise<void> {
+    if (this.state.status !== 'idle') {
+      this.feedback.notify(notice.busy());
+      return;
+    }
+    const file = this.history?.audioPath(id) ?? null;
+    let wav: Buffer | null = null;
+    if (file) {
+      try {
+        wav = await readFile(file);
+      } catch (err) {
+        log.warn(`Could not read ${file}: ${(err as Error).message}`);
+      }
+    }
+    if (!file || !wav || wav.length <= WAV_HEADER_BYTES) {
+      log.info(`Dictation ${short(id)}: nothing to recover`);
+      this.feedback.notify(notice.nothingToRecover());
+      return;
+    }
+    if (this.state.status !== 'idle') return;
+    const pcm = wav.subarray(WAV_HEADER_BYTES);
+    const durationMs = Math.round(pcm.length / BYTES_PER_MS);
+    const now = Date.now();
+    const s: Session = {
+      id,
+      startedAt: now,
+      openMs: null,
+      chunks: [],
+      bytes: pcm.length,
+      nextIndex: 0,
+      lost: 0,
+      pendingVolumes: [],
+      outcome: null,
+      reason: 'undo_cancel',
+      message: '',
+      keepAudio: false,
+      doneTimer: null,
+      target: this.paster.captureTarget(id),
+      stoppedAt: now,
+      audioAt: now,
+      recovered: true,
+      soundsAt: [],
+    };
+    log.info(`Dictation ${short(id)}: recovering ${durationMs} ms of cancelled audio`);
+    this.feedback.clearNotice();
+    this.engine.prepare(this.store.get().prefs.dictationLanguage);
+    this.formatting.prepare();
+    this.setStatus('processing', 'undo cancel', { id, startedAt: now, handsFree: false, level: 0, micSilent: false });
+    let result = await this.transcribe(s, file, pcm, durationMs);
+    if (result.outcome === 'done') result = await this.format(s, result);
+    if (result.outcome === 'done') result = await this.paste(s, result);
+    this.conclude(s, result);
   }
 
   private copyLast(): void {
@@ -634,7 +847,10 @@ export class Dictation {
         break;
       case 'silent':
         log.warn(`Dictation ${short(s.id)}: the microphone has sent only silence for 5 s`);
-        if (this.current === s) this.patch({ micSilent: true });
+        if (this.current === s) {
+          this.patch({ micSilent: true });
+          this.feedback.notify(notice.micSilent(s.id));
+        }
         break;
       case 'done':
         void this.finish(s);

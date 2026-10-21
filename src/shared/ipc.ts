@@ -1,6 +1,7 @@
 // Canales IPC entre ventanas y main. El preload solo expone estos; no hay un
 // puente genérico que acepte cualquier nombre de canal.
 
+import type { BarSound, NoticeAction } from './bar';
 import type { Preferences } from './preferences';
 import type { SharedState } from './state';
 import type { HistoryEntry } from './transcription';
@@ -19,7 +20,41 @@ export const IPC = {
   revealRecording: 'dictation:reveal-recording',
   downloadModel: 'transcription:download-model',
   listHistory: 'history:list',
+  openMicrophoneSettings: 'permissions:open-microphone-settings',
 } as const;
+
+/** Canales de la barra flotante (preload/bar.ts), además de getState y stateChanged. */
+export const BAR_IPC = {
+  /** barra → main: el cursor entra (true) o sale (false) de una zona que recibe clics. */
+  interactive: 'bar:interactive',
+  /** barra → main: BarCommand. */
+  command: 'bar:command',
+  /** barra → main: arrastre de la píldora, en coordenadas de pantalla. */
+  drag: 'bar:drag',
+  /** main → barra: un sonido que reproducir (BarSound). */
+  sound: 'bar:sound',
+} as const;
+
+export type BarCommand =
+  | { type: 'start' }
+  | { type: 'stop' }
+  | { type: 'cancel' }
+  | { type: 'menu' }
+  | { type: 'notice-action'; id: number; action: NoticeAction }
+  | { type: 'notice-closed'; id: number; why: 'closed' | 'timeout' };
+
+export type BarDrag = { phase: 'start' | 'move' | 'end'; x: number; y: number };
+
+/** API que el preload de la barra publica como window.bar. */
+export interface BarApi {
+  getState(): Promise<SharedState>;
+  onState(listener: (state: SharedState) => void): () => void;
+  setInteractive(on: boolean): void;
+  command(c: BarCommand): void;
+  drag(d: BarDrag): void;
+  /** Devuelve la función para darse de baja. */
+  onSound(listener: (sound: BarSound) => void): () => void;
+}
 
 /** Canales de la ventana de grabación (preload/recorder.ts). */
 export const RECORDER_IPC = {
@@ -66,6 +101,8 @@ export interface SpeechApi {
   revealRecording(id?: string): Promise<void>;
   /** Empieza o reanuda la descarga del modelo elegido. */
   downloadModel(): Promise<void>;
+  /** Abre Ajustes del Sistema en Privacidad › Micrófono. */
+  openMicrophoneSettings(): Promise<void>;
   /** Los últimos dictados, del más reciente al más antiguo. */
   listHistory(limit: number): Promise<HistoryEntry[]>;
 }

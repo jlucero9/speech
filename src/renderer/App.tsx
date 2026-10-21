@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
+import type { BarEdge } from '../shared/bar';
 import { FORMATTING_PROVIDERS, type FormattingProvider } from '../shared/formatting';
 import type { PasteResult, SharedState } from '../shared/state';
 import {
@@ -63,19 +64,69 @@ function Panels({ state }: { state: SharedState }) {
           status={state.data.databaseReady ? <Badge tone="ok">Ready</Badge> : <Badge tone="error">Error</Badge>}
         />
       </Section>
+      <Section title="Bar">
+        <BarRows state={state} />
+      </Section>
       <Section title="Sound">
         <Row
-          label="Dictation sounds"
-          description="Play a sound when dictation starts and stops."
+          label="Dictation and notification sounds"
+          description="Play a sound when dictation starts and stops, and when the bar shows a notice."
           status={
             <Switch
-              label="Dictation sounds"
+              label="Dictation and notification sounds"
               checked={state.prefs.enableSounds}
               onChange={(v) => void window.speech.setPreference('enableSounds', v)}
             />
           }
         />
       </Section>
+    </>
+  );
+}
+
+function BarRows({ state }: { state: SharedState }) {
+  const p = state.prefs;
+  const hiddenUntil = p.barHiddenUntil > Date.now() ? new Date(p.barHiddenUntil) : null;
+  return (
+    <>
+      <Row
+        label="Show the bar at all times"
+        description={
+          hiddenUntil
+            ? `Hidden until ${hiddenUntil.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}. It still appears while you dictate.`
+            : 'When off, the bar only appears while you dictate or have a notice.'
+        }
+        status={
+          <>
+            {hiddenUntil && (
+              <Button variant="secondary" onClick={() => window.speech.setPreference('barHiddenUntil', 0)}>
+                Show now
+              </Button>
+            )}
+            <Switch
+              label="Show the bar at all times"
+              checked={p.showBar}
+              onChange={(v) => void window.speech.setPreference('showBar', v)}
+            />
+          </>
+        }
+      />
+      <Row
+        label="Bar position"
+        description="You can also drag the bar to the bottom, left or right edge of the screen."
+        status={
+          <Select
+            label="Bar position"
+            value={p.barEdge}
+            options={[
+              ['bottom', 'Bottom'],
+              ['left', 'Left'],
+              ['right', 'Right'],
+            ]}
+            onChange={(v) => void window.speech.setPreference('barEdge', v as BarEdge)}
+          />
+        }
+      />
     </>
   );
 }
@@ -171,7 +222,7 @@ function ShortcutRow({ state }: { state: SharedState }) {
   const description =
     k.tap === 'failed'
       ? 'macOS refused to let Speech watch the keyboard. Check the permissions above.'
-      : 'Hold fn and speak, then release. Press fn twice quickly for hands-free. Esc cancels.';
+      : 'Hold fn and speak, then release. For hands-free, double-tap fn or press fn + Space; tap fn again to stop. Esc cancels.';
   return <Row label="Shortcut" description={description} status={status} />;
 }
 

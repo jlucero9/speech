@@ -11,6 +11,9 @@ import { logger } from '../log';
 // - Un atajo se activa cuando el conjunto de teclas pulsadas es exactamente
 //   el suyo (sin importar el orden) y no hay otras pulsadas que el helper no
 //   envió. «Cancelar» se dispara aunque haya otras teclas pulsadas.
+// - Con un atajo pulsado, otra tecla que complete otro atajo lo sustituye
+//   (fn y después Espacio: de push-to-talk a manos libres); si no completa
+//   ninguno, se avisa como combinación ajena.
 // - La suelta de cualquier tecla del atajo activo lo suelta.
 // - Teclas atascadas (se perdió la suelta): cada 5 s, y antes de aceptar un
 //   atajo con una tecla pulsada desde hace más de 2,5 s, se pregunta al
@@ -111,7 +114,15 @@ export class ShortcutListener extends EventEmitter<ShortcutEvents> {
       return;
     }
     if (this.active) {
-      this.emit('chord', this.active.action);
+      // Otra tecla con un atajo pulsado: si juntas forman otro atajo (fn y
+      // luego Espacio), pasa a ser ese; si no, es una combinación ajena.
+      const next = this.match();
+      if (next && next.action !== this.active.action) {
+        this.active = next;
+        this.emit('down', next.action);
+      } else {
+        this.emit('chord', this.active.action);
+      }
       return;
     }
 
