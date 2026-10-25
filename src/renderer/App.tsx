@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom';
 import type { HistoryStats } from '../shared/history';
 import { isHubPage, type HubPage } from '../shared/ipc';
+import { DictionaryPage } from './hub/Dictionary';
 import { HistoryList } from './hub/History';
 import { BookIcon, CloseIcon, GearIcon, LogoMark, MicIcon, SidebarIcon } from './hub/icons';
 import { ToastProvider } from './hub/ui';
@@ -136,23 +137,6 @@ function useHistoryStats(): HistoryStats | null {
   useEffect(load, [load]);
   useEffect(() => window.speech.onHistoryChanged(load), [load]);
   return stats;
-}
-
-// MARK: Dictionary
-
-function DictionaryPage() {
-  return (
-    <div className="page">
-      <h1 className="page-heading">Dictionary</h1>
-      <div className="history-empty">
-        <div className="history-empty-icon">
-          <BookIcon size={20} />
-        </div>
-        <h2 className="history-empty-title">Your dictionary is on its way</h2>
-        <p className="history-empty-body">Soon you'll be able to add names and words here so they're always spelled right.</p>
-      </div>
-    </div>
-  );
 }
 
 // MARK: Settings

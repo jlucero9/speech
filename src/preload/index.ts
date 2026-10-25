@@ -41,6 +41,19 @@ const api: SpeechApi = {
   retryTranscript: (id) => ipcRenderer.invoke(IPC.retryTranscript, id),
   deleteTranscript: (id) => ipcRenderer.invoke(IPC.deleteTranscript, id),
   extractAudio: (id) => ipcRenderer.invoke(IPC.extractAudio, id),
+  onDictionaryChanged: (listener) => {
+    const handler = () => listener();
+    ipcRenderer.on(HUB_EVENTS.dictionaryChanged, handler);
+    return () => ipcRenderer.removeListener(HUB_EVENTS.dictionaryChanged, handler);
+  },
+  listDictionary: () => ipcRenderer.invoke(IPC.listDictionary),
+  addWord: (input) => ipcRenderer.invoke(IPC.addWord, input),
+  editWord: (id, input) => ipcRenderer.invoke(IPC.editWord, id, input),
+  removeWords: (ids) => ipcRenderer.invoke(IPC.removeWords, ids),
+  starWord: (id, starred) => ipcRenderer.invoke(IPC.starWord, id, starred),
+  restoreWords: (entries) => ipcRenderer.invoke(IPC.restoreWords, entries),
+  chooseDictionaryFile: () => ipcRenderer.invoke(IPC.chooseDictionaryFile),
+  importDictionary: (items) => ipcRenderer.invoke(IPC.importDictionary, items),
 };
 
 contextBridge.exposeInMainWorld('speech', api);

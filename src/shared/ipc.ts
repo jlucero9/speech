@@ -5,6 +5,7 @@ import type { BarSound, NoticeAction } from './bar';
 import type { Preferences } from './preferences';
 import type { SharedState } from './state';
 import type { HistoryActionResult, HistoryPage, HistoryQuery, HistoryStats } from './history';
+import type { DictionaryEntry, DictionaryImportChoice, DictionaryInput, DictionaryResult } from './dictionary';
 
 export const IPC = {
   getState: 'state:get',
@@ -29,6 +30,14 @@ export const IPC = {
   retryTranscript: 'history:retry',
   deleteTranscript: 'history:delete',
   extractAudio: 'history:extract-audio',
+  listDictionary: 'dictionary:list',
+  addWord: 'dictionary:add',
+  editWord: 'dictionary:edit',
+  removeWords: 'dictionary:remove',
+  starWord: 'dictionary:star',
+  restoreWords: 'dictionary:restore',
+  chooseDictionaryFile: 'dictionary:choose-file',
+  importDictionary: 'dictionary:import',
 } as const;
 
 /** main → Hub. */
@@ -37,6 +46,8 @@ export const HUB_EVENTS = {
   navigate: 'hub:navigate',
   /** El historial cambió: hay que volver a leerlo. */
   historyChanged: 'history:changed',
+  /** El diccionario cambió: hay que volver a leerlo. */
+  dictionaryChanged: 'dictionary:changed',
 } as const;
 
 /** Páginas del Hub. «settings» abre el diálogo de ajustes sobre la página actual. */
@@ -143,4 +154,19 @@ export interface SpeechApi {
   deleteTranscript(id: string): Promise<HistoryActionResult>;
   /** Pide dónde guardar el audio y lo copia allí. ok sin mensaje si se cancela. */
   extractAudio(id: string): Promise<HistoryActionResult & { saved?: boolean }>;
+  /** Devuelve la función para darse de baja. */
+  onDictionaryChanged(listener: () => void): () => void;
+  /** Del más reciente al más antiguo. */
+  listDictionary(): Promise<DictionaryEntry[]>;
+  addWord(input: DictionaryInput): Promise<DictionaryResult>;
+  editWord(id: string, input: DictionaryInput): Promise<DictionaryResult>;
+  /** Cuántas se borraron. */
+  removeWords(ids: string[]): Promise<number>;
+  starWord(id: string, starred: boolean): Promise<void>;
+  /** Vuelve a guardar lo borrado tal cual estaba; cuántas volvieron. */
+  restoreWords(entries: DictionaryEntry[]): Promise<number>;
+  /** Pide un fichero y dice qué se importaría (preview null si se cancela). */
+  chooseDictionaryFile(): Promise<DictionaryImportChoice>;
+  /** Cuántas se añadieron. */
+  importDictionary(items: DictionaryInput[]): Promise<number>;
 }

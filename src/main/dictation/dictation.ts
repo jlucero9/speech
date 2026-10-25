@@ -21,6 +21,7 @@ import type { Store } from '../store';
 import { TranscriptionError, type TranscriptionEngine } from '../transcription/engine';
 import { isPasteFailure, type PasteOutcome, type Paster } from './paste';
 import type { ShortcutListener } from './shortcuts';
+import type { Substituted } from './substitutions';
 import { checkVoice, MIN_SPEECH_MS } from './voice';
 import { BYTES_PER_MS, WAV_HEADER_BYTES, wavFile } from './wav';
 
@@ -83,6 +84,15 @@ export interface DictationFeedback {
   followCursor(): void;
 }
 
+/** Lo que el dictado usa del diccionario; se lee en cada dictado. */
+export interface DictationWords {
+  /** Términos para las pistas del motor y del formateo. */
+  terms(): string[];
+  /** Palabras que se escriben tal cual (no se pasan a minúscula al continuar una frase). */
+  spellings(): string[];
+  substitute(text: string): Substituted;
+}
+
 interface Session {
   id: string;
   startedAt: number;
@@ -143,7 +153,7 @@ export class Dictation {
     private readonly recordingsDir: string,
     private readonly engine: TranscriptionEngine,
     private readonly history: History | null,
-    private readonly vocabulary: () => string[],
+    private readonly words: DictationWords,
     private readonly paster: Paster,
     private readonly formatting: TextFormatting,
     private readonly feedback: DictationFeedback,
@@ -532,7 +542,7 @@ export class Dictation {
         audioPath: file,
         durationMs,
         language,
-        vocabulary: this.vocabulary(),
+        vocabulary: this.words.terms(),
         signal: abort.signal,
       });
       this.updateHistory(s.id, {
@@ -580,7 +590,7 @@ export class Dictation {
     const raw = r.text ?? '';
     if (!raw.trim()) return r;
     const target = await s.target;
-    const vocabulary = this.vocabulary();
+    const vocabulary = this.words.terms();
     const abort = new AbortController();
     if (!s.background) this.transcribing = { id: s.id, abort };
     try {
@@ -595,13 +605,16 @@ export class Dictation {
         },
         abort.signal,
       );
-      const text = fitToSurroundings(o.text, target?.surroundings ?? null, vocabulary);
+      // Las sustituciones del diccionario van sobre el texto final, formateado o no.
+      const sub = this.words.substitute(o.text);
+      if (sub.count) log.info(`Dictation ${short(s.id)}: ${sub.count} dictionary ${sub.count === 1 ? 'replacement' : 'replacements'}`);
+      const text = fitToSurroundings(sub.text, target?.surroundings ?? null, this.words.spellings());
       if (target && !target.surroundings) log.info(`Dictation ${short(s.id)}: no text around the cursor (${target.surroundingsUnavailable})`);
       let format: FormatInfo;
       if (o.result === 'formatted') {
         format = { result: o.result, model: o.formatted.model, ms: o.formatted.ms };
         this.updateHistory(s.id, {
-          formattedText: o.text,
+          formattedText: sub.text,
           formatResult: o.result,
           formatProvider: o.formatted.provider,
           formatModel: o.formatted.model,
@@ -609,10 +622,12 @@ export class Dictation {
         });
       } else if (o.result === 'off') {
         format = { result: o.result, model: null, ms: null };
-        this.updateHistory(s.id, { formatResult: o.result });
+        this.updateHistory(s.id, { formatResult: o.result, ...(sub.count ? { formattedText: sub.text } : {}) });
       } else {
         format = { result: o.result, model: o.model, ms: o.ms };
         this.updateHistory(s.id, {
+          // Sin formateo, el texto con las sustituciones es la versión editada de la fila.
+          ...(sub.count ? { formattedText: sub.text } : {}),
           formatResult: o.result,
           formatProvider: o.provider,
           formatModel: o.model,

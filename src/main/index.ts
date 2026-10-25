@@ -2,10 +2,11 @@ import { app, clipboard, dialog, ipcMain, powerMonitor, shell } from 'electron';
 import { mkdirSync } from 'node:fs';
 import { copyFile, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { HUB_EVENTS, IPC, type HubPage } from '../shared/ipc';
 import { shownText, type HistoryActionResult } from '../shared/history';
+import type { DictionaryImportChoice, DictionaryInput, DictionaryResult } from '../shared/dictionary';
 import type { BarSound, NoticeAction } from '../shared/bar';
 import { isValidPreference, type Preferences } from '../shared/preferences';
 import { DEFAULT_SHORTCUTS } from '../shared/shortcuts';
@@ -14,7 +15,8 @@ import { BarWindow } from './bar/bar-window';
 import { notice } from './bar/notice-texts';
 import { Notices } from './bar/notices';
 import { openDatabase } from './db';
-import { Dictation } from './dictation/dictation';
+import { Dictation, type DictationWords } from './dictation/dictation';
+import { Dictionary } from './dictionary';
 import { Paster } from './dictation/paste';
 import { ShortcutListener } from './dictation/shortcuts';
 import { HelperProcess } from './helper/helper-process';
@@ -123,17 +125,22 @@ function main(): void {
       log.error('Could not delete old audio', err);
     }
   });
-  const vocabulary = (): string[] => {
-    if (!db) return [];
+  // Diccionario. Si la base falla, se dicta igual, sin él.
+  const dictionary = db ? new Dictionary(db) : null;
+  dictionary?.onChange(() => sendToHub(HUB_EVENTS.dictionaryChanged));
+  const readDictionary = <T>(read: (d: Dictionary) => T, fallback: T): T => {
+    if (!dictionary) return fallback;
     try {
-      return db
-        .prepare('SELECT phrase FROM dictionary WHERE replacement IS NULL ORDER BY is_starred DESC, updated_at DESC')
-        .all()
-        .map((r) => String(r.phrase));
+      return read(dictionary);
     } catch (err) {
       log.warn(`Could not read the dictionary: ${(err as Error).message}`);
-      return [];
+      return fallback;
     }
+  };
+  const words: DictationWords = {
+    terms: () => readDictionary((d) => d.terms(), []),
+    spellings: () => readDictionary((d) => d.spellings(), []),
+    substitute: (text) => readDictionary((d) => d.substitute(text), { text, count: 0 }),
   };
 
   // Transcripción: el modelo se descarga la primera vez; desde entonces, sin red.
@@ -252,7 +259,7 @@ function main(): void {
     recordingsDir,
     engine,
     history,
-    vocabulary,
+    words,
     paster,
     formatting,
     {
@@ -368,6 +375,58 @@ function main(): void {
     }
   });
 
+  // Diccionario (Hub)
+  const noDictionary: DictionaryResult = { ok: false, message: 'The dictionary is not available.' };
+  const toInput = (v: unknown): DictionaryInput => {
+    const o = (v ?? {}) as { phrase?: unknown; replacement?: unknown };
+    return {
+      phrase: typeof o.phrase === 'string' ? o.phrase : '',
+      replacement: typeof o.replacement === 'string' ? o.replacement : null,
+    };
+  };
+  ipcMain.handle(IPC.listDictionary, () => dictionary?.list() ?? []);
+  ipcMain.handle(IPC.addWord, (_e, input: unknown) => dictionary?.add(toInput(input)) ?? noDictionary);
+  ipcMain.handle(IPC.editWord, (_e, id: unknown, input: unknown) => dictionary?.edit(String(id), toInput(input)) ?? noDictionary);
+  ipcMain.handle(IPC.removeWords, (_e, ids: unknown) => (Array.isArray(ids) ? (dictionary?.remove(ids.map(String)) ?? 0) : 0));
+  ipcMain.handle(IPC.starWord, (_e, id: unknown, starred: unknown) => dictionary?.setStarred(String(id), starred === true));
+  ipcMain.handle(IPC.chooseDictionaryFile, async (): Promise<DictionaryImportChoice> => {
+    if (!dictionary) return noDictionary;
+    const options = {
+      title: 'Import words',
+      defaultPath: join(homedir(), 'Downloads'),
+      properties: ['openFile' as const],
+      filters: [{ name: 'Text or CSV', extensions: ['txt', 'csv', 'tsv'] }],
+    };
+    const win = hubWindow();
+    const r = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options);
+    const file = r.filePaths[0];
+    if (r.canceled || !file) return { ok: true, preview: null };
+    try {
+      return dictionary.preview(basename(file), await readFile(file));
+    } catch (err) {
+      log.warn(`Could not read ${file}: ${(err as Error).message}`);
+      return { ok: false, message: 'Could not read the file.' };
+    }
+  });
+  ipcMain.handle(IPC.restoreWords, (_e, entries: unknown) => {
+    if (!Array.isArray(entries) || !dictionary) return 0;
+    return dictionary.restore(
+      entries.map((v) => {
+        const o = (v ?? {}) as Record<string, unknown>;
+        return {
+          ...toInput(o),
+          id: String(o.id),
+          starred: o.starred === true,
+          createdAt: Number(o.createdAt) || Date.now(),
+          updatedAt: Number(o.updatedAt) || Date.now(),
+        };
+      }),
+    );
+  });
+  ipcMain.handle(IPC.importDictionary, (_e, items: unknown) =>
+    Array.isArray(items) ? (dictionary?.import(items.map(toInput)) ?? 0) : 0,
+  );
+
   app.on('before-quit', () => {
     log.info('Quitting');
     helper.stop();
@@ -394,6 +453,7 @@ function main(): void {
       paster,
       dictation,
       history,
+      dictionary,
       models,
       engine,
       showHub,

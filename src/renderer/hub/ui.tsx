@@ -15,27 +15,37 @@ import { createPortal } from 'react-dom';
 
 // MARK: Avisos emergentes
 
+export interface ToastAction {
+  label: string;
+  run: () => void;
+}
+
 interface Toast {
   id: number;
   text: string;
+  action?: ToastAction;
 }
 
-const ToastContext = createContext<(text: string) => void>(() => {});
+type ShowToast = (text: string, action?: ToastAction) => void;
 
-export function useToast(): (text: string) => void {
+const ToastContext = createContext<ShowToast>(() => {});
+
+export function useToast(): ShowToast {
   return useContext(ToastContext);
 }
 
 const TOAST_MS = 3_000;
+/** Con un botón («Undo»), un poco más: hay que leerlo y llegar a pulsarlo. */
+const TOAST_ACTION_MS = 6_000;
 
 /** Uno a la vez, abajo a la derecha; el nuevo sustituye al anterior. */
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toast, setToast] = useState<Toast | null>(null);
   const next = useRef(1);
-  const show = useCallback((text: string) => setToast({ id: next.current++, text }), []);
+  const show = useCallback<ShowToast>((text, action) => setToast({ id: next.current++, text, action }), []);
   useEffect(() => {
     if (!toast) return;
-    const t = setTimeout(() => setToast((cur) => (cur?.id === toast.id ? null : cur)), TOAST_MS);
+    const t = setTimeout(() => setToast((cur) => (cur?.id === toast.id ? null : cur)), toast.action ? TOAST_ACTION_MS : TOAST_MS);
     return () => clearTimeout(t);
   }, [toast]);
   return (
@@ -44,7 +54,19 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       {toast &&
         createPortal(
           <div className="toast" role="status" key={toast.id}>
-            {toast.text}
+            <span className="toast-text">{toast.text}</span>
+            {toast.action && (
+              <button
+                type="button"
+                className="toast-action"
+                onClick={() => {
+                  setToast(null);
+                  toast.action?.run();
+                }}
+              >
+                {toast.action.label}
+              </button>
+            )}
           </div>,
           document.body,
         )}

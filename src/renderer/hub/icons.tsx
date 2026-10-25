@@ -184,6 +184,80 @@ export function AlertIcon(p: IconProps) {
   );
 }
 
+export function PencilIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4.5 1.5L5 15z" />
+      <path d="m14.5 5.5 3 3" />
+    </Svg>
+  );
+}
+
+export function StarIcon({ filled, ...p }: IconProps & { filled?: boolean }) {
+  return (
+    <Svg {...p}>
+      <path
+        d="m12 3 2.7 5.6 6.1.8-4.5 4.3 1.1 6.1L12 16.9l-5.4 2.9 1.1-6.1-4.5-4.3 6.1-.8z"
+        fill={filled ? 'currentColor' : 'none'}
+      />
+    </Svg>
+  );
+}
+
+export function SortIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="m3.5 8 4-4.5 4 4.5M7.5 4v16" />
+      <path d="m20.5 16-4 4.5-4-4.5M16.5 20V4" />
+    </Svg>
+  );
+}
+
+export function ImportIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M12 3v12" />
+      <path d="m7.5 10.5 4.5 4.5 4.5-4.5" />
+      <path d="M4 15.5v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" />
+    </Svg>
+  );
+}
+
+export function SelectIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <rect x="3.5" y="3.5" width="17" height="17" rx="3" />
+      <path d="m8 12 3 3 5-6" />
+    </Svg>
+  );
+}
+
+export function CheckIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="m5 12.5 4.5 4.5L19 7.5" />
+    </Svg>
+  );
+}
+
+export function ArrowRightIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M4.5 12h15M13.5 6l6 6-6 6" />
+    </Svg>
+  );
+}
+
+export function InfoIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <circle cx="12" cy="12" r="9.5" />
+      <path d="M12 11v5.5" />
+      <path d="M12 7.5h.01" />
+    </Svg>
+  );
+}
+
 /** Marca de la app: tres barras de onda dentro de un círculo. */
 export function LogoMark({ size = 22 }: { size?: number }) {
   return (
