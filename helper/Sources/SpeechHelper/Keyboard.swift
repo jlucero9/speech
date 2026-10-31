@@ -14,6 +14,15 @@ import ApplicationServices
 // dictado, y la tecla no modificadora que completa un atajo con modificadores
 // (para que, por ejemplo, fn + Espacio no escriba un espacio).
 //
+// Cada tecla de un atajo es un conjunto de teclas físicas: ⌘ «de cualquier
+// lado» son las dos ⌘. Main manda esos códigos propios (0x1000 + la tecla
+// izquierda) y aquí se traducen.
+//
+// Grabación de un atajo (editor de atajos del Hub): mientras dura, se envían
+// todas las teclas, con su nombre en la distribución de teclado actual, y se
+// tragan las que no son modificadores, para que no escriban nada. Solo la pide
+// main mientras el editor espera una combinación, y se apaga sola al minuto.
+//
 // El callback del tap no hace trabajo: decide, encola el mensaje y vuelve. Si
 // tarda, el sistema desactiva el tap.
 
@@ -43,10 +52,32 @@ private let deviceBitsByFamily: [UInt64: UInt64] = {
     return out
 }()
 
+/// Códigos de main para «este modificador, de cualquier lado».
+private let anySide: [Int: [Int]] = [
+    0x1037: [0x37, 0x36],
+    0x1038: [0x38, 0x3C],
+    0x103A: [0x3A, 0x3D],
+    0x103B: [0x3B, 0x3E],
+]
+
 struct Shortcut {
     let action: String
-    let keys: Set<Int>
+    /// Una entrada por tecla del atajo: las teclas físicas que la cumplen.
+    let slots: [Set<Int>]
     let hasModifier: Bool
+
+    init(action: String, keys: [Int]) {
+        self.action = action
+        slots = keys.map { Set(anySide[$0] ?? [$0]) }
+        hasModifier = slots.contains { $0.contains { Keyboard.isModifier($0) } }
+    }
+
+    var allKeys: Set<Int> { slots.reduce(into: Set<Int>()) { $0.formUnion($1) } }
+
+    /// Todas sus teclas están pulsadas.
+    func satisfied(by pressed: Set<Int>) -> Bool {
+        slots.allSatisfy { !$0.isDisjoint(with: pressed) }
+    }
 }
 
 enum TapState: String {
@@ -67,14 +98,16 @@ final class Keyboard {
     static let dismissAction = "dismiss"
 
     /// Se llaman desde el hilo del tap; deben ser seguras entre hilos.
-    var onKey: ((_ index: Int, _ key: Int, _ down: Bool, _ hidden: Int) -> Void)?
+    var onKey: ((_ index: Int, _ key: Int, _ down: Bool, _ hidden: Int, _ name: String?) -> Void)?
     var onTapStatus: ((_ state: TapState, _ reason: String) -> Void)?
 
     private let lock = NSLock()
     // Protegido por `lock`.
     private var shortcuts: [Shortcut] = []
     private var shortcutKeys: Set<Int> = []
-    private var dismissKeys: Set<Int> = []
+    private var dismiss: Shortcut?
+    private var recording = false
+    private var layout: KeyLayout?
     private var dictationActive = false
     private var pressed: Set<Int> = []
     private var forwarded: Set<Int> = []
@@ -96,10 +129,21 @@ final class Keyboard {
     func setShortcuts(_ list: [Shortcut]) {
         lock.lock()
         shortcuts = list
-        shortcutKeys = list.reduce(into: Set<Int>()) { $0.formUnion($1.keys) }
-        dismissKeys = list.first { $0.action == Keyboard.dismissAction }?.keys ?? []
+        shortcutKeys = list.reduce(into: Set<Int>()) { $0.formUnion($1.allKeys) }
+        dismiss = list.first { $0.action == Keyboard.dismissAction }
         lock.unlock()
-        Log.info("Shortcuts: \(list.map { "\($0.action)=\($0.keys.sorted())" }.joined(separator: ", "))")
+        Log.info("Shortcuts: \(list.map { "\($0.action)=\($0.slots.map { $0.sorted() })" }.joined(separator: ", "))")
+    }
+
+    /// Cola principal: la distribución de teclado solo se lee aquí.
+    func setRecording(_ on: Bool) {
+        let newLayout = on ? KeyLayout.current() : nil
+        lock.lock()
+        let changed = recording != on
+        recording = on
+        layout = newLayout
+        lock.unlock()
+        if changed { Log.info("Shortcut recording \(on ? "on" : "off")") }
     }
 
     func setDictationActive(_ active: Bool) {
@@ -247,7 +291,7 @@ final class Keyboard {
         let hidden = pressed.subtracting(forwarded).count
         lock.unlock()
         if !stale.isEmpty { Log.info("Resync after \(reason): released \(stale.sorted())") }
-        for (i, k) in ups { onKey?(i, k, false, hidden) }
+        for (i, k) in ups { onKey?(i, k, false, hidden, nil) }
     }
 
     /// Estado real de una tecla. Los modificadores se leen de las banderas
@@ -319,9 +363,32 @@ final class Keyboard {
         var swallow = false
 
         lock.lock()
+        if recording {
+            // Todo se envía; lo que no es modificador no llega a ninguna app.
+            let name = Keyboard.isModifier(key) ? nil : layout?.name(of: key)
+            let isMod = Keyboard.isModifier(key)
+            var send = false
+            if down {
+                if !repeated, !pressed.contains(key) {
+                    pressed.insert(key)
+                    forwarded.insert(key)
+                    send = true
+                }
+                if !isMod { swallowed.insert(key) }
+            } else {
+                pressed.remove(key)
+                swallowed.remove(key)
+                send = forwarded.remove(key) != nil
+            }
+            if send { index += 1 }
+            let i = index
+            lock.unlock()
+            if send { onKey?(i, key, down, 0, name) }
+            return !isMod
+        }
         if down {
             if repeated || pressed.contains(key) {
-                // Autorrepetición: no se envía; se traga si se tragó la original.
+                // Autorrepetición: no se envía; se traga si se tragó la primera pulsación.
                 swallow = swallowed.contains(key)
             } else {
                 let shortcutHeld = !forwarded.isDisjoint(with: shortcutKeys)
@@ -345,7 +412,7 @@ final class Keyboard {
         }
         lock.unlock()
 
-        if let (i, k, d, h) = message { onKey?(i, k, d, h) }
+        if let (i, k, d, h) = message { onKey?(i, k, d, h, nil) }
         return swallow
     }
 
@@ -361,10 +428,17 @@ final class Keyboard {
     /// Con `lock` tomado.
     private func shouldSwallow(_ key: Int) -> Bool {
         if modifierBits[key] != nil { return false }
-        if dictationActive, dismissKeys.contains(key), dismissKeys.isSubset(of: pressed) { return true }
+        if dictationActive, let d = dismiss, d.allKeys.contains(key), d.satisfied(by: pressed) { return true }
         let modifiersHeld = pressed.filter { modifierBits[$0] != nil }
-        for s in shortcuts where s.hasModifier && s.keys.contains(key) {
-            if s.keys == modifiersHeld.union([key]) { return true }
+        for s in shortcuts where s.hasModifier && s.allKeys.contains(key) {
+            // Exactamente sus modificadores (uno por entrada) y esta tecla.
+            let modSlots = s.slots.filter { $0.contains { modifierBits[$0] != nil } }
+            let keySlots = s.slots.filter { !$0.contains { modifierBits[$0] != nil } }
+            if modSlots.count == modifiersHeld.count,
+               modSlots.allSatisfy({ !$0.isDisjoint(with: modifiersHeld) }),
+               keySlots.count == 1, keySlots[0].contains(key) {
+                return true
+            }
         }
         return false
     }

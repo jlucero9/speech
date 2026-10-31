@@ -145,6 +145,23 @@ export class History {
     return deleted;
   }
 
+  /**
+   * Borra los dictados (y su audio) creados antes de `cutoff` que ya
+   * terminaron; los que están en curso se quedan. Devuelve cuántos borró.
+   */
+  deleteBefore(cutoff: number): number {
+    const rows = this.db
+      .prepare(`SELECT id, audio_path FROM history WHERE created_at < ? AND status NOT IN ('recording', 'processing')`)
+      .all(cutoff);
+    const del = this.db.prepare('DELETE FROM history WHERE id = ?');
+    for (const row of rows) {
+      del.run(String(row.id));
+      if (row.audio_path != null) remove(String(row.audio_path));
+    }
+    if (rows.length) this.changed();
+    return rows.length;
+  }
+
   /** Palabras, ritmo y racha, sobre el texto que enseña cada fila. */
   stats(now = Date.now()): HistoryStats {
     const rows = this.db

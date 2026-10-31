@@ -54,10 +54,13 @@ export class Paster {
     });
   }
 
-  /** Anota la app y el campo con foco con la clave `id`. null si no se pudo. */
-  async captureTarget(id: string): Promise<PasteTargetInfo | null> {
+  /**
+   * Anota la app y el campo con foco con la clave `id`. null si no se pudo.
+   * Sin `readContext` no se lee el texto que rodea al cursor.
+   */
+  async captureTarget(id: string, readContext: boolean): Promise<PasteTargetInfo | null> {
     try {
-      const res = await this.helper.request('CaptureTarget', { id }, CAPTURE_TIMEOUT_MS);
+      const res = await this.helper.request('CaptureTarget', { id, readContext }, CAPTURE_TIMEOUT_MS);
       const t = res.payload;
       if (typeof t.pid !== 'number') return null;
       const c = t.context;

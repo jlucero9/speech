@@ -1,7 +1,8 @@
 import { BrowserWindow, ipcMain, session, type IpcMainEvent, type WebContents } from 'electron';
 import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
-import { RECORDER_IPC, type RecorderCommand, type RecorderEvent } from '../shared/ipc';
+import { RECORDER_IPC, type RecorderCommand, type RecorderDevice, type RecorderEvent } from '../shared/ipc';
+import type { MicrophoneDevice } from '../shared/state';
 import { logger } from './log';
 
 // Ventana oculta que captura el micrófono. Vive mientras vive la app, así que
@@ -14,8 +15,13 @@ const log = logger('recorder');
 
 const RECREATE_DELAY_MS = 1_000;
 
+/** Los eventos de un dictado (los que llevan id). */
+export type RecordingEvent = Extract<RecorderEvent, { id: string }> | { type: 'ready' };
+
 export interface RecorderEvents {
-  event: [RecorderEvent];
+  event: [RecordingEvent];
+  devices: [devices: MicrophoneDevice[], systemDefault: string | null];
+  level: [level: number];
   chunk: [id: string, index: number, pcm: Buffer, volume: number];
 }
 
@@ -107,8 +113,13 @@ export class RecorderWindow extends EventEmitter<RecorderEvents> {
     ses.setPermissionCheckHandler((contents, permission) => permission === 'media' && contents === this.contents);
   }
 
-  start(id: string): void {
-    this.send({ type: 'start', id });
+  start(id: string, device: RecorderDevice): void {
+    this.send({ type: 'start', id, device });
+  }
+
+  /** Mide el nivel de un micrófono (null: el del sistema; undefined: deja de medir). */
+  monitor(device: RecorderDevice | undefined): void {
+    this.send(device === undefined ? { type: 'monitor-stop' } : { type: 'monitor', device });
   }
 
   stop(id: string): void {
@@ -144,6 +155,12 @@ export class RecorderWindow extends EventEmitter<RecorderEvents> {
       case 'done':
         if (this.openId === event.id) this.openId = null;
         break;
+      case 'devices':
+        this.emit('devices', event.devices, event.systemDefault);
+        return;
+      case 'level':
+        this.emit('level', event.level);
+        return;
     }
     this.emit('event', event);
   }

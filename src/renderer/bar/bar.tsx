@@ -6,6 +6,7 @@ import type { SharedState } from '../../shared/state';
 import { AlertIcon, CheckIcon, CloseIcon, ErrorIcon, InfoIcon, MicIcon } from './icons';
 import { playSound } from './sounds';
 import './bar.css';
+import { compactLabel, firstBinding, type ShortcutBinding } from '../../shared/shortcuts';
 
 // La barra flotante. Pinta el estado del dictado que llega de main y le
 // devuelve los clics; no decide nada por su cuenta.
@@ -112,7 +113,7 @@ function App() {
       <div className="dock" data-visible={pillVisible}>
         <div className="hot-area" data-hot={pillVisible ? '' : undefined}>
           <div className="tooltip" data-visible={pill === 'ready' && pillHover}>
-            Dictate <b>fn</b>
+            Dictate <b>{pttLabel(state.prefs.shortcuts)}</b>
           </div>
           <Pill
             state={pill}
@@ -335,3 +336,9 @@ createRoot(document.getElementById('root')!).render(
     <App />
   </StrictMode>,
 );
+
+/** El atajo de dictar, como se escribe en macOS. */
+function pttLabel(list: ShortcutBinding[]): string {
+  const b = firstBinding(list, 'ptt');
+  return b ? compactLabel(b.keys, b.names) : 'fn';
+}

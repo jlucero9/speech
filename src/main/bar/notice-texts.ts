@@ -5,8 +5,13 @@ import type { NewNotice } from './notices';
 // Textos de los avisos de la barra, en un solo sitio. Los atajos van en
 // **negrita**.
 
-/** Atajo de «pegar el último dictado», como se escribe en macOS. */
-const PASTE_LAST = '⌃⌘V';
+/** Atajos que nombran los avisos, como se escriben en macOS; cambian con los ajustes. */
+const keys = { ptt: 'fn', pasteLast: '⌃⌘V' as string | null };
+
+export function setNoticeShortcuts(ptt: string, pasteLast: string | null): void {
+  keys.ptt = ptt;
+  keys.pasteLast = pasteLast;
+}
 
 export const notice = {
   pasteFailed(dictationId: string | null): NewNotice {
@@ -14,7 +19,9 @@ export const notice = {
       kind: 'paste_failed',
       status: 'info',
       badge: 'Tip',
-      title: `Click a textbox and use **${PASTE_LAST}** to paste`,
+      title: keys.pasteLast
+        ? `Click a textbox and use **${keys.pasteLast}** to paste`
+        : 'Click a textbox and paste it with **⌘V**',
       timeoutMs: 6_000,
       dictationId,
     };
@@ -58,7 +65,7 @@ export const notice = {
       status: 'alert',
       title: 'Pasted without formatting',
       body,
-      actions: actionable ? [{ action: 'open_hub', label: 'Open Speech' }] : [],
+      actions: actionable ? [{ action: 'open_style', label: 'Open Speech' }] : [],
       timeoutMs: 6_000,
       dictationId,
     };
@@ -93,7 +100,7 @@ export const notice = {
       kind: 'short_tap',
       status: 'info',
       badge: 'Tip',
-      title: 'Hold **fn** while you speak, or double-tap it for hands-free',
+      title: `Hold **${keys.ptt}** while you speak, or double-tap it for hands-free`,
       timeoutMs: 3_000,
       sound: false,
     };

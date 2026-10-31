@@ -183,7 +183,7 @@ final class Paster: NSObject, NSPasteboardItemDataProvider {
     // MARK: Destino
 
     /// Anota la app de delante y su elemento con foco con la clave `id`.
-    func captureTarget(id: String) -> [String: Any] {
+    func captureTarget(id: String, readContext: Bool) -> [String: Any] {
         guard let app = frontApp() else {
             Log.warn("CaptureTarget: no frontmost app")
             return [:]
@@ -192,7 +192,7 @@ final class Paster: NSObject, NSPasteboardItemDataProvider {
         let axApp = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(axApp, Paster.axTimeout)
         let started = Date()
-        TextContext.enableManualAccessibility(axApp, pid: pid)
+        if readContext { TextContext.enableManualAccessibility(axApp, pid: pid) }
         let target = PasteTarget(
             pid: pid,
             bundleId: app.bundleIdentifier,
@@ -204,7 +204,7 @@ final class Paster: NSObject, NSPasteboardItemDataProvider {
         targets.append((id, target))
         if targets.count > Paster.keptTargets { targets.removeFirst(targets.count - Paster.keptTargets) }
         let role = target.element.flatMap { Paster.string($0, kAXRoleAttribute) } ?? "none"
-        let context = TextContext.read(target.element)
+        let context: [String: Any] = readContext ? TextContext.read(target.element) : ["unavailable": "context awareness off"]
         let ms = Int((Date().timeIntervalSince(started) * 1000).rounded())
         // En el registro, solo cuánto texto se leyó: nunca el texto.
         let read = (context["unavailable"] as? String).map { "text not read: \($0)" }

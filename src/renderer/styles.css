@@ -1,4 +1,4 @@
-/* Tokens de diseño (tema claro) y estilos de los ajustes provisionales. */
+/* Tokens de diseño (tema claro) y piezas comunes: insignia, interruptor y medidor. */
 
 @font-face {
   font-family: 'Figtree';
@@ -75,56 +75,6 @@ html {
   color: var(--foreground-tertiary);
 }
 
-.section + .section {
-  margin-top: 24px;
-}
-
-.section-title {
-  font-size: 12px;
-  line-height: 20px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.075em;
-  color: var(--foreground-tertiary);
-  margin: 0 0 8px;
-}
-
-.card {
-  background: var(--background-tertiary);
-  border-radius: 12px;
-}
-
-.row {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 14px 16px;
-}
-
-.row + .row {
-  border-top: 1px solid var(--border);
-}
-
-.row-text {
-  flex: 1;
-  min-width: 0;
-}
-
-.row-label {
-  font-weight: 550;
-}
-
-.row-description {
-  color: var(--foreground-tertiary);
-}
-
-.row-status {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: none;
-}
-
 .badge {
   font-size: 12px;
   line-height: 20px;
@@ -154,42 +104,9 @@ html {
   color: var(--foreground-tertiary);
 }
 
-.button {
-  font: inherit;
-  font-weight: 550;
-  border: none;
-  border-radius: 8px;
-  padding: 6px 12px;
-  white-space: nowrap;
-}
-
-.button:focus-visible,
 .switch:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
-}
-
-.button:disabled {
-  opacity: 0.5;
-}
-
-.button-primary {
-  background: var(--primary);
-  color: var(--primary-foreground);
-}
-
-.button-primary:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--primary) 90%, var(--background));
-}
-
-.button-secondary {
-  background: var(--background-secondary);
-  color: var(--foreground);
-  font-weight: 600;
-}
-
-.button-secondary:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--background-secondary) 94%, var(--foreground));
 }
 
 .switch {
@@ -238,22 +155,6 @@ html {
 
 .meter-wide {
   width: 120px;
-}
-
-.select {
-  font: inherit;
-  font-weight: 550;
-  color: var(--foreground);
-  background: var(--background-secondary);
-  border: none;
-  border-radius: 8px;
-  padding: 6px 8px;
-  max-width: 240px;
-}
-
-.select:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
 }
 
 .history-row {

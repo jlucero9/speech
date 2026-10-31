@@ -4,7 +4,6 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { BarSound } from '../../shared/bar';
 import type { PasteTargetInfo } from '../../shared/helper-protocol';
-import type { RecorderEvent } from '../../shared/ipc';
 import type { HistoryActionResult } from '../../shared/history';
 import type { DictationOutcome, DictationResult, DictationState, DictationStatus, FormatInfo, PasteInfo } from '../../shared/state';
 import { notice } from '../bar/notice-texts';
@@ -16,13 +15,13 @@ import type { HelperProcess } from '../helper/helper-process';
 import type { History } from '../history';
 import { logger } from '../log';
 import type { Permissions } from '../permissions';
-import type { RecorderWindow } from '../recorder-window';
+import type { RecorderWindow, RecordingEvent } from '../recorder-window';
 import type { Store } from '../store';
 import { TranscriptionError, type TranscriptionEngine } from '../transcription/engine';
 import { isPasteFailure, type PasteOutcome, type Paster } from './paste';
 import type { ShortcutListener } from './shortcuts';
 import type { Substituted } from './substitutions';
-import { checkVoice, MIN_SPEECH_MS } from './voice';
+import { checkVoice, MIN_SPEECH_MS, type VoiceLevels } from './voice';
 import { BYTES_PER_MS, WAV_HEADER_BYTES, wavFile } from './wav';
 
 // Máquina de estados del dictado:
@@ -71,6 +70,8 @@ const LEVEL_EVERY_MS = 150;
 const MIN_KEEP_BYTES = 16_000;
 /** Rango de nivel que se pinta, en dBFS. */
 const LEVEL_FLOOR_DB = -60;
+/** El sonido de empezar dura ~0,2 s: se silencia la salida después. */
+const MUTE_AFTER_MS = 300;
 
 type CancelKind = 'user' | 'discard' | 'failure';
 
@@ -82,6 +83,12 @@ export interface DictationFeedback {
   clearNotice(): void;
   /** Al empezar a dictar: la barra pasa a la pantalla donde está el cursor. */
   followCursor(): void;
+  /** Atajo de dictar, para los textos («fn»). */
+  pttLabel(): string;
+  /** Un dictado terminó (para el historial que no se guarda). */
+  concluded(id: string, outcome: DictationOutcome): void;
+  /** Con qué micrófono se grabó. */
+  microphoneUsed(label: string): void;
 }
 
 /** Lo que el dictado usa del diccionario; se lee en cada dictado. */
@@ -120,6 +127,8 @@ interface Session {
   background: boolean;
   /** Horas a las que sonó la app durante la grabación (el micrófono los recoge). */
   soundsAt: number[];
+  /** Micrófono con el que se grabó, por su nombre; null si no se sabe. */
+  device: string | null;
 }
 
 export class Dictation {
@@ -143,6 +152,9 @@ export class Dictation {
   private transcribing: { id: string; abort: AbortController } | null = null;
   /** Filas que se están reintentando desde el Hub. */
   private retrying = new Set<string>();
+  private muteTimer: NodeJS.Timeout | null = null;
+  /** La salida está silenciada por un dictado. */
+  private muted = false;
 
   constructor(
     private readonly store: Store,
@@ -157,6 +169,7 @@ export class Dictation {
     private readonly paster: Paster,
     private readonly formatting: TextFormatting,
     private readonly feedback: DictationFeedback,
+    private readonly voiceLevels: VoiceLevels,
   ) {
     mkdirSync(recordingsDir, { recursive: true });
     shortcuts.on('down', (action) => {
@@ -180,6 +193,11 @@ export class Dictation {
 
   private get state(): DictationState {
     return this.store.get().dictation;
+  }
+
+  /** Hay un dictado grabando o terminando. */
+  get inProgress(): boolean {
+    return this.state.status !== 'idle';
   }
 
   private get active(): boolean {
@@ -234,7 +252,7 @@ export class Dictation {
       this.releaseTimer = null;
       if (this.current === s && this.active && !this.state.handsFree) {
         log.info(`Dictation ${short(s.id)}: short tap and no second press`);
-        this.cancel('debounce_ptt', 'discard', 'Too short. Hold fn while you speak.');
+        this.cancel('debounce_ptt', 'discard', `Too short. Hold ${this.feedback.pttLabel()} while you speak.`);
         this.feedback.notify(notice.shortTap());
       }
     }, DEBOUNCE_MS);
@@ -244,7 +262,7 @@ export class Dictation {
     const s = this.current;
     if (!this.active || !s || this.state.handsFree) return;
     if (Date.now() - s.startedAt < CHORD_CANCEL_MS) {
-      this.cancel('other_shortcut', 'discard', 'Another key was pressed with fn.');
+      this.cancel('other_shortcut', 'discard', `Another key was pressed with ${this.feedback.pttLabel()}.`);
     }
   }
 
@@ -356,12 +374,13 @@ export class Dictation {
       message: '',
       keepAudio: false,
       doneTimer: null,
-      target: this.paster.captureTarget(randomId),
+      target: this.paster.captureTarget(randomId, this.store.get().prefs.contextAwareness),
       stoppedAt: null,
       audioAt: null,
       recovered: false,
       background: false,
       soundsAt: [],
+      device: null,
     };
     this.current = s;
     this.feedback.followCursor();
@@ -373,7 +392,14 @@ export class Dictation {
       micSilent: false,
     });
     this.sound(s, handsFree ? 'lock' : 'start');
-    this.recorder.start(s.id);
+    const prefs = this.store.get().prefs;
+    this.recorder.start(s.id, prefs.microphoneId ? { id: prefs.microphoneId, label: prefs.microphoneLabel } : null);
+    if (prefs.muteWhileDictating) {
+      this.muteTimer = setTimeout(() => {
+        this.muteTimer = null;
+        if (this.current === s) this.setMuted(true);
+      }, MUTE_AFTER_MS);
+    }
     this.engine.prepare(this.store.get().prefs.dictationLanguage);
     this.formatting.prepare();
 
@@ -431,6 +457,7 @@ export class Dictation {
   private detach(s: Session): void {
     this.current = null;
     this.clearTimers();
+    this.setMuted(false);
     this.closing.set(s.id, s);
   }
 
@@ -465,6 +492,7 @@ export class Dictation {
         if (file && this.state.last?.id === s.id) {
           this.patch({ last: { ...this.state.last, durationMs, file } });
         }
+        if (file) this.feedback.concluded(s.id, 'cancelled');
       }
       return;
     }
@@ -487,8 +515,21 @@ export class Dictation {
     this.conclude(s, result);
   }
 
+  /** Silencia la salida durante la grabación, o le devuelve el sonido. */
+  private setMuted(on: boolean): void {
+    if (this.muteTimer) clearTimeout(this.muteTimer);
+    this.muteTimer = null;
+    if (on === this.muted) return;
+    this.muted = on;
+    void this.helper
+      .request('SetOutputMuted', { muted: on })
+      .then((r) => log.info(`Output ${on ? 'mute' : 'unmute'}: ${r.payload.detail}`))
+      .catch((err: Error) => log.warn(`SetOutputMuted failed: ${err.message}`));
+  }
+
   /** Muestra el resultado y avisa de lo que haya salido mal. */
   private conclude(s: Session, result: DictationResult): void {
+    this.feedback.concluded(s.id, result.outcome);
     if (this.state.id === s.id) {
       this.setStatus('idle', result.reason, { handsFree: false, level: 0, last: result });
     } else {
@@ -514,13 +555,14 @@ export class Dictation {
     if (s.recovered) this.updateHistory(s.id, { status: 'processing', language, error: null });
     else this.record(s, durationMs, file, 'processing', { language });
     const audioStart = s.startedAt + (s.openMs ?? 0);
-    const voice = checkVoice(pcm, s.soundsAt.map((t) => t - audioStart));
+    const voice = checkVoice(pcm, s.soundsAt.map((t) => t - audioStart), this.voiceLevels.get(s.device));
+    const levels =
+      `floor ${voice.floorDb.toFixed(0)} dBFS, peak ${voice.peakDb.toFixed(0)} dBFS, ` +
+      `voice ${voice.voiceDb?.toFixed(0) ?? '-'} dBFS, minimum ${voice.gateDb.toFixed(0)} dBFS`;
+    this.voiceLevels.learn(s.device, voice.voiceDb, voice.speechMs < MIN_SPEECH_MS);
     if (voice.speechMs < MIN_SPEECH_MS) {
       // Sin voz, whisper se inventaría una frase: ni se transcribe ni se pega.
-      log.info(
-        `Dictation ${short(s.id)}: no speech (${voice.speechMs} ms above the threshold, ` +
-          `floor ${voice.floorDb.toFixed(0)} dBFS, peak ${voice.peakDb.toFixed(0)} dBFS); not transcribing`,
-      );
+      log.info(`Dictation ${short(s.id)}: no speech (${voice.speechMs} ms above the threshold, ${levels}); not transcribing`);
       this.updateHistory(s.id, { status: 'done', asrText: '' });
       return {
         ...this.result(s, file),
@@ -533,6 +575,7 @@ export class Dictation {
         language,
       };
     }
+    log.info(`Dictation ${short(s.id)}: ${voice.speechMs} ms of speech (${levels})`);
     const abort = new AbortController();
     if (!s.background) this.transcribing = { id: s.id, abort };
     const base = { ...this.result(s, file), durationMs };
@@ -740,7 +783,7 @@ export class Dictation {
     const pcm = wav.subarray(WAV_HEADER_BYTES);
     const durationMs = Math.round(pcm.length / BYTES_PER_MS);
     const now = Date.now();
-    const s = savedSession(id, now, pcm.length, this.paster.captureTarget(id), false);
+    const s = savedSession(id, now, pcm.length, this.paster.captureTarget(id, this.store.get().prefs.contextAwareness), false);
     log.info(`Dictation ${short(id)}: recovering ${durationMs} ms of cancelled audio`);
     this.feedback.clearNotice();
     this.engine.prepare(this.store.get().prefs.dictationLanguage);
@@ -877,13 +920,15 @@ export class Dictation {
 
   // MARK: Grabación
 
-  private onRecorderEvent(e: RecorderEvent): void {
+  private onRecorderEvent(e: RecordingEvent): void {
     if (e.type === 'ready') return;
     const s = this.current?.id === e.id ? this.current : this.closing.get(e.id);
     if (!s) return;
     switch (e.type) {
       case 'started':
         s.openMs = e.openMs;
+        s.device = e.device;
+        this.feedback.microphoneUsed(e.device);
         log.info(`Dictation ${short(s.id)}: microphone open in ${e.openMs} ms (${e.device}, ${e.sampleRate} Hz)`);
         if (this.current === s && this.state.status === 'initializing') this.setStatus('listening', 'microphone open');
         break;
@@ -998,6 +1043,7 @@ function savedSession(id: string, now: number, bytes: number, target: Promise<Pa
     recovered: true,
     background,
     soundsAt: [],
+    device: null,
   };
 }
 

@@ -152,8 +152,7 @@ button {
 }
 
 /* Sin barra de desplazamiento a la vista, como el resto del sistema con trackpad. */
-.page-card::-webkit-scrollbar,
-.settings-body::-webkit-scrollbar {
+.page-card::-webkit-scrollbar {
   display: none;
 }
 
@@ -685,32 +684,6 @@ button {
 
 .hub-button-destructive:hover {
   background: var(--destructive-400);
-}
-
-.settings-dialog {
-  width: min(960px, calc(100vw - 48px));
-  height: min(640px, calc(100vh - 48px));
-  display: flex;
-  flex-direction: column;
-  background: var(--shade-white);
-  overflow: hidden;
-}
-
-.settings-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 32px 32px 0 48px;
-}
-
-.settings-head .page-heading {
-  margin: 0;
-}
-
-.settings-body {
-  flex: 1;
-  overflow-y: auto;
-  padding: 28px 48px 48px;
 }
 
 @keyframes fade-in {

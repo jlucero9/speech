@@ -1,23 +1,33 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { createPortal } from 'react-dom';
 import type { HistoryStats } from '../shared/history';
 import { isHubPage, type HubPage } from '../shared/ipc';
+import { firstBinding, keyLabel } from '../shared/shortcuts';
 import { DictionaryPage } from './hub/Dictionary';
 import { HistoryList } from './hub/History';
-import { BookIcon, CloseIcon, GearIcon, LogoMark, MicIcon, SidebarIcon } from './hub/icons';
+import { BookIcon, GearIcon, LogoMark, MicIcon, SidebarIcon, TypeIcon } from './hub/icons';
+import { StylePage } from './hub/Style';
 import { ToastProvider } from './hub/ui';
-import { ProvisionalSettings } from './settings/ProvisionalSettings';
+import { SettingsDialog, type SettingsSection } from './settings/Settings';
 import { useSharedState } from './useSharedState';
 
 // El Hub: barra lateral con las páginas, el contenido en una tarjeta a la
 // derecha y los ajustes en un diálogo encima.
 
-type Page = Exclude<HubPage, 'settings'>;
+type Page = 'dictation' | 'dictionary' | 'style';
+
+/** Sección de ajustes de una página «settings…», o null si no es de ajustes. */
+function settingsSection(p: HubPage): SettingsSection | null {
+  if (p === 'settings') return 'general';
+  if (p === 'settings/system') return 'system';
+  if (p === 'settings/data') return 'data';
+  return null;
+}
 
 export function App() {
   const initial = location.hash.slice(1);
-  const [page, setPage] = useState<Page>(initial === 'dictionary' ? 'dictionary' : 'dictation');
-  const [settingsOpen, setSettingsOpen] = useState(initial === 'settings');
+  const initialPage: HubPage = isHubPage(initial) ? initial : 'dictation';
+  const [page, setPage] = useState<Page>(settingsSection(initialPage) ? 'dictation' : (initialPage as Page));
+  const [settings, setSettings] = useState<SettingsSection | null>(settingsSection(initialPage));
   const [collapsed, setCollapsed] = useState(false);
 
   // main pide una página al abrir el Hub desde la barra, la bandeja o un aviso.
@@ -25,10 +35,11 @@ export function App() {
     () =>
       window.speech.onNavigate((p) => {
         if (!isHubPage(p)) return;
-        if (p === 'settings') setSettingsOpen(true);
+        const section = settingsSection(p);
+        if (section) setSettings(section);
         else {
-          setSettingsOpen(false);
-          setPage(p);
+          setSettings(null);
+          setPage(p as Page);
         }
       }),
     [],
@@ -55,18 +66,29 @@ export function App() {
           <ul className="nav">
             <NavItem icon={<MicIcon />} label="Dictation" active={page === 'dictation'} onClick={() => setPage('dictation')} />
             <NavItem icon={<BookIcon />} label="Dictionary" active={page === 'dictionary'} onClick={() => setPage('dictionary')} />
+            <NavItem icon={<TypeIcon />} label="Style" active={page === 'style'} onClick={() => setPage('style')} />
           </ul>
           <div className="nav-bottom">
             <ul className="nav">
-              <NavItem icon={<GearIcon />} label="Settings" active={settingsOpen} onClick={() => setSettingsOpen(true)} />
+              <NavItem icon={<GearIcon />} label="Settings" active={settings !== null} onClick={() => setSettings('general')} />
             </ul>
           </div>
         </nav>
         <main className="page-card">
-          {page === 'dictation' ? <DictationPage /> : <DictionaryPage />}
+          {page === 'dictation' ? <DictationPage /> : page === 'dictionary' ? <DictionaryPage /> : <StylePage />}
         </main>
       </div>
-      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+      {settings && (
+        <SettingsDialog
+          section={settings}
+          onSection={setSettings}
+          onClose={() => setSettings(null)}
+          onOpenStyle={() => {
+            setSettings(null);
+            setPage('style');
+          }}
+        />
+      )}
     </ToastProvider>
   );
 }
@@ -91,10 +113,18 @@ function NavItem({ icon, label, active, onClick }: { icon: ReactNode; label: str
 // MARK: Dictation
 
 function DictationPage() {
+  const state = useSharedState();
+  const ptt = state ? firstBinding(state.prefs.shortcuts, 'ptt') : null;
   return (
     <div className="page dictation-page">
       <h1 className="greeting">
-        Hold <kbd className="key-embossed">fn</kbd> and speak in any app
+        Hold{' '}
+        {(ptt?.keys ?? [0x3f]).map((k) => (
+          <kbd key={k} className="key-embossed">
+            {keyLabel(k, ptt?.names)}
+          </kbd>
+        ))}{' '}
+        and speak in any app
       </h1>
       <div className="dictation-columns">
         <HistoryList />
@@ -137,35 +167,4 @@ function useHistoryStats(): HistoryStats | null {
   useEffect(load, [load]);
   useEffect(() => window.speech.onHistoryChanged(load), [load]);
   return stats;
-}
-
-// MARK: Settings
-
-function SettingsDialog({ onClose }: { onClose: () => void }) {
-  const state = useSharedState();
-  useEffect(() => {
-    const key = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !document.querySelector('.menu, .confirm')) onClose();
-    };
-    document.addEventListener('keydown', key);
-    return () => document.removeEventListener('keydown', key);
-  }, [onClose]);
-  return createPortal(
-    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal settings-dialog" role="dialog" aria-modal aria-labelledby="settings-title">
-        <div className="settings-head">
-          <h1 id="settings-title" className="page-heading">
-            Settings
-          </h1>
-          <button type="button" className="icon-button" aria-label="Close settings" onClick={onClose}>
-            <CloseIcon size={18} />
-          </button>
-        </div>
-        <div className="settings-body">
-          {state ? <ProvisionalSettings state={state} /> : <p className="muted">Loading…</p>}
-        </div>
-      </div>
-    </div>,
-    document.body,
-  );
 }

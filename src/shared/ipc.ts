@@ -3,7 +3,7 @@
 
 import type { BarSound, NoticeAction } from './bar';
 import type { Preferences } from './preferences';
-import type { SharedState } from './state';
+import type { MicrophoneDevice, SharedState, ShortcutRecording } from './state';
 import type { HistoryActionResult, HistoryPage, HistoryQuery, HistoryStats } from './history';
 import type { DictionaryEntry, DictionaryImportChoice, DictionaryInput, DictionaryResult } from './dictionary';
 
@@ -38,6 +38,9 @@ export const IPC = {
   restoreWords: 'dictionary:restore',
   chooseDictionaryFile: 'dictionary:choose-file',
   importDictionary: 'dictionary:import',
+  recordShortcut: 'shortcuts:record',
+  monitorMicrophone: 'microphone:monitor',
+  resetSettings: 'settings:reset',
 } as const;
 
 /** main → Hub. */
@@ -48,13 +51,21 @@ export const HUB_EVENTS = {
   historyChanged: 'history:changed',
   /** El diccionario cambió: hay que volver a leerlo. */
   dictionaryChanged: 'dictionary:changed',
+  /** Teclas mientras se graba un atajo (ShortcutRecording). */
+  shortcutRecording: 'shortcuts:recording',
+  /** Nivel del micrófono que se prueba en el diálogo, de 0 a 1. */
+  microphoneLevel: 'microphone:level',
 } as const;
 
-/** Páginas del Hub. «settings» abre el diálogo de ajustes sobre la página actual. */
-export type HubPage = 'dictation' | 'dictionary' | 'settings';
+/**
+ * Páginas del Hub. «settings» abre el diálogo de ajustes sobre la página
+ * actual, en General; «settings/…», en esa sección.
+ */
+export const HUB_PAGES = ['dictation', 'dictionary', 'style', 'settings', 'settings/system', 'settings/data'] as const;
+export type HubPage = (typeof HUB_PAGES)[number];
 
 export function isHubPage(value: unknown): value is HubPage {
-  return value === 'dictation' || value === 'dictionary' || value === 'settings';
+  return (HUB_PAGES as readonly unknown[]).includes(value);
 }
 
 /** Canales de la barra flotante (preload/bar.ts), además de getState y stateChanged. */
@@ -100,7 +111,15 @@ export const RECORDER_IPC = {
   chunk: 'recorder:chunk',
 } as const;
 
-export type RecorderCommand = { type: 'start'; id: string } | { type: 'stop'; id: string };
+/** Micrófono con el que grabar: null, el del sistema. */
+export type RecorderDevice = { id: string; label: string } | null;
+
+export type RecorderCommand =
+  | { type: 'start'; id: string; device: RecorderDevice }
+  | { type: 'stop'; id: string }
+  /** Abre el micrófono solo para medir su nivel (diálogo de ajustes). */
+  | { type: 'monitor'; device: RecorderDevice }
+  | { type: 'monitor-stop' };
 
 export type RecorderEvent =
   | { type: 'ready' }
@@ -108,7 +127,11 @@ export type RecorderEvent =
   | { type: 'failed'; id: string; error: string }
   /** Muestras todas a cero durante 5 s seguidos. */
   | { type: 'silent'; id: string }
-  | { type: 'done'; id: string; chunks: number };
+  | { type: 'done'; id: string; chunks: number }
+  /** Micrófonos conectados (al arrancar y cada vez que cambian). */
+  | { type: 'devices'; devices: MicrophoneDevice[]; systemDefault: string | null }
+  /** Nivel del micrófono que se mide, de 0 a 1. */
+  | { type: 'level'; level: number };
 
 /** API que el preload de la ventana de grabación publica como window.recorder. */
 export interface RecorderApi {
@@ -169,4 +192,14 @@ export interface SpeechApi {
   chooseDictionaryFile(): Promise<DictionaryImportChoice>;
   /** Cuántas se añadieron. */
   importDictionary(items: DictionaryInput[]): Promise<number>;
+  /** Empieza o deja de grabar un atajo (el helper deja de disparar los atajos). */
+  recordShortcut(on: boolean): Promise<void>;
+  /** Devuelve la función para darse de baja. */
+  onShortcutRecording(listener: (r: ShortcutRecording) => void): () => void;
+  /** Mide el nivel de un micrófono ('' el del sistema) o deja de medir (null). */
+  monitorMicrophone(device: { id: string; label: string } | null): Promise<void>;
+  /** Devuelve la función para darse de baja. */
+  onMicrophoneLevel(listener: (level: number) => void): () => void;
+  /** Vuelve a los ajustes por defecto; el historial y el diccionario no se tocan. */
+  resetSettings(): Promise<void>;
 }

@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import type { HelperEvents } from '../../shared/helper-protocol';
-import type { ShortcutAction, ShortcutBinding } from '../../shared/shortcuts';
+import { comboMatches, keyMatches, type ShortcutAction, type ShortcutBinding } from '../../shared/shortcuts';
+import type { ShortcutRecording } from '../../shared/state';
 import type { HelperProcess } from '../helper/helper-process';
 import { logger } from '../log';
 
@@ -19,12 +20,18 @@ import { logger } from '../log';
 //   atajo con una tecla pulsada desde hace más de 2,5 s, se pregunta al
 //   helper cuáles siguen pulsadas de verdad.
 // - Si el helper se reinicia o se pierde, todo se da por suelto.
+// - ⌘, ⇧, ⌥ y ⌃ «de cualquier lado» en un atajo valen con cualquiera de las
+//   dos teclas (shared/shortcuts.ts).
+// - Grabación (editor de atajos): no se dispara ningún atajo; se junta lo que
+//   se pulsa hasta soltarlo todo y eso es la combinación.
 
 const log = logger('shortcuts');
 
 const STALE_CHECK_EVERY_MS = 5_000;
 const STALE_KEY_AGE_MS = 2_500;
 const STALE_CHECK_TIMEOUT_MS = 500;
+/** Lo mismo que espera el helper antes de apagar la grabación de un atajo. */
+const RECORDING_TIMEOUT_MS = 60_000;
 /** Con `npm run start:debug` se registra cada tecla recibida del helper. */
 const LOG_KEYS = process.env.SPEECH_DEBUG === '1';
 
@@ -33,6 +40,8 @@ export interface ShortcutEvents {
   up: [ShortcutAction];
   /** Otra tecla pulsada mientras se mantiene un atajo. */
   chord: [ShortcutAction];
+  /** Mientras se graba un atajo, en cada tecla. */
+  recording: [ShortcutRecording];
 }
 
 export class ShortcutListener extends EventEmitter<ShortcutEvents> {
@@ -42,6 +51,8 @@ export class ShortcutListener extends EventEmitter<ShortcutEvents> {
   private active: ShortcutBinding | null = null;
   private staleTimer: NodeJS.Timeout | null = null;
   private checking: Promise<void> | null = null;
+  private recording: { held: Set<number>; combo: Set<number>; names: Record<string, string> } | null = null;
+  private recordingTimer: NodeJS.Timeout | null = null;
 
   constructor(
     private readonly helper: HelperProcess,
@@ -51,6 +62,7 @@ export class ShortcutListener extends EventEmitter<ShortcutEvents> {
     helper.on('ready', () => {
       this.reset('helper ready');
       void this.sendShortcuts();
+      if (this.recording) void this.sendRecording(true);
     });
     helper.on('state', (s) => {
       if (s.status !== 'ready') this.reset(`helper ${s.status}`);
@@ -66,6 +78,65 @@ export class ShortcutListener extends EventEmitter<ShortcutEvents> {
     return [...this.pressed.keys()];
   }
 
+  get current(): ShortcutBinding[] {
+    return this.shortcuts;
+  }
+
+  /** Atajos nuevos: se aplican en el acto, también en el helper. */
+  setShortcuts(list: ShortcutBinding[]): void {
+    this.shortcuts = list;
+    this.reset('shortcuts changed');
+    void this.sendShortcuts();
+  }
+
+  get isRecording(): boolean {
+    return this.recording !== null;
+  }
+
+  /** Empieza a grabar un atajo: hasta pararla, las teclas no disparan nada. */
+  startRecording(): void {
+    if (!this.recording) log.info('Recording a shortcut');
+    this.reset('recording a shortcut');
+    this.recording = { held: new Set(), combo: new Set(), names: {} };
+    void this.sendRecording(true);
+    // El helper la apaga solo al minuto; aquí, a la vez, para no quedar sin atajos.
+    if (this.recordingTimer) clearTimeout(this.recordingTimer);
+    this.recordingTimer = setTimeout(() => this.stopRecording('timed out'), RECORDING_TIMEOUT_MS);
+  }
+
+  stopRecording(why: string): void {
+    if (this.recordingTimer) clearTimeout(this.recordingTimer);
+    this.recordingTimer = null;
+    if (!this.recording) return;
+    log.info(`Stopped recording a shortcut (${why})`);
+    this.recording = null;
+    this.reset('shortcut recording ended');
+    void this.sendRecording(false);
+  }
+
+  private async sendRecording(on: boolean): Promise<void> {
+    try {
+      await this.helper.request('SetShortcutRecording', { on });
+    } catch (err) {
+      log.warn(`Could not ${on ? 'start' : 'stop'} shortcut recording in the helper: ${(err as Error).message}`);
+    }
+  }
+
+  private onRecordingKey(key: number, down: boolean, name: string | undefined): void {
+    const r = this.recording!;
+    if (name) r.names[String(key)] = name;
+    if (down) {
+      // Una tecla nueva tras soltarlo todo empieza otra combinación.
+      if (r.held.size === 0) r.combo.clear();
+      r.held.add(key);
+      r.combo.add(key);
+    } else {
+      r.held.delete(key);
+    }
+    const done = r.held.size === 0 && r.combo.size > 0 ? [...r.combo] : null;
+    this.emit('recording', { held: [...r.held], done, names: { ...r.names } });
+  }
+
   private async sendShortcuts(): Promise<void> {
     try {
       await this.helper.request('UpdateShortcuts', { shortcuts: this.shortcuts });
@@ -74,7 +145,7 @@ export class ShortcutListener extends EventEmitter<ShortcutEvents> {
     }
   }
 
-  private onKey({ index, key, down, hidden }: HelperEvents['KeyEvent']): void {
+  private onKey({ index, key, down, hidden, name }: HelperEvents['KeyEvent']): void {
     if (index === 1 && this.lastIndex > 0) {
       this.reset('helper restarted');
     } else if (this.lastIndex > 0 && index !== this.lastIndex + 1) {
@@ -83,6 +154,10 @@ export class ShortcutListener extends EventEmitter<ShortcutEvents> {
     this.lastIndex = index;
     this.hidden = hidden;
     if (LOG_KEYS) log.info(`Key ${key} ${down ? 'down' : 'up'} (#${index}, ${hidden} other held)`);
+    if (this.recording) {
+      this.onRecordingKey(key, down, name);
+      return;
+    }
 
     if (down) {
       if (this.pressed.has(key)) {
@@ -100,7 +175,7 @@ export class ShortcutListener extends EventEmitter<ShortcutEvents> {
 
   private release(key: number): void {
     if (!this.pressed.delete(key)) return;
-    if (this.active?.keys.includes(key)) {
+    if (this.active?.keys.some((k) => keyMatches(k, key))) {
       const action = this.active.action;
       this.active = null;
       this.emit('up', action);
@@ -108,8 +183,14 @@ export class ShortcutListener extends EventEmitter<ShortcutEvents> {
   }
 
   private async evaluateDown(key: number): Promise<void> {
-    const dismiss = this.shortcuts.find((s) => s.action === 'dismiss');
-    if (dismiss?.keys.includes(key) && dismiss.keys.every((k) => this.pressed.has(k))) {
+    const pressed = [...this.pressed.keys()];
+    const dismiss = this.shortcuts.find(
+      (s) =>
+        s.action === 'dismiss' &&
+        s.keys.some((k) => keyMatches(k, key)) &&
+        s.keys.every((k) => pressed.some((p) => keyMatches(k, p))),
+    );
+    if (dismiss) {
       this.emit('down', 'dismiss');
       return;
     }
@@ -131,7 +212,7 @@ export class ShortcutListener extends EventEmitter<ShortcutEvents> {
 
     // Una tecla del atajo lleva mucho rato «pulsada»: puede ser un resto.
     const now = Date.now();
-    if (match.keys.some((k) => k !== key && now - (this.pressed.get(k) ?? now) > STALE_KEY_AGE_MS)) {
+    if ([...this.pressed].some(([k, at]) => k !== key && now - at > STALE_KEY_AGE_MS)) {
       await this.checkStale();
       if (!this.pressed.has(key)) return;
       match = this.match();
@@ -144,9 +225,7 @@ export class ShortcutListener extends EventEmitter<ShortcutEvents> {
   private match(): ShortcutBinding | null {
     if (this.hidden > 0) return null;
     return (
-      this.shortcuts.find(
-        (s) => s.action !== 'dismiss' && s.keys.length === this.pressed.size && s.keys.every((k) => this.pressed.has(k)),
-      ) ?? null
+      this.shortcuts.find((s) => s.action !== 'dismiss' && comboMatches(s.keys, this.pressed.keys())) ?? null
     );
   }
 

@@ -47,6 +47,34 @@ export const DICTATION_LANGUAGES: Record<string, string> = {
   zh: 'Chinese',
 };
 
+/** Nombre de cada idioma en el propio idioma, para el diálogo de idiomas. */
+export const DICTATION_LANGUAGE_NATIVE: Record<string, string> = {
+  en: 'English',
+  es: 'Español',
+  ca: 'Català',
+  pt: 'Português',
+  fr: 'Français',
+  it: 'Italiano',
+  de: 'Deutsch',
+  nl: 'Nederlands',
+  pl: 'Polski',
+  ru: 'Русский',
+  uk: 'Українська',
+  tr: 'Türkçe',
+  ar: 'العربية',
+  hi: 'हिन्दी',
+  ja: '日本語',
+  ko: '한국어',
+  zh: '中文',
+};
+
+/** «Spanish (Español)»; el inglés, solo «English». */
+export function languageLabel(code: string): string {
+  const name = DICTATION_LANGUAGES[code] ?? code;
+  const native = DICTATION_LANGUAGE_NATIVE[code];
+  return native && native !== name ? `${name} (${native})` : name;
+}
+
 export function isDictationLanguage(value: unknown): value is string {
   return typeof value === 'string' && Object.hasOwn(DICTATION_LANGUAGES, value);
 }

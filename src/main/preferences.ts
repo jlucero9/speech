@@ -11,7 +11,7 @@ const log = logger('prefs');
 const FILE_VERSION = 1;
 
 /** Los valores por defecto; el idioma del dictado, el del sistema. */
-function defaults(): Preferences {
+export function defaultPreferences(): Preferences {
   return { ...DEFAULT_PREFERENCES, dictationLanguage: defaultDictationLanguage(app.getPreferredSystemLanguages()) };
 }
 
@@ -21,11 +21,11 @@ export function loadPreferences(path: string): Preferences {
     raw = readFileSync(path, 'utf8');
   } catch {
     log.info('No preferences file yet, using defaults');
-    return defaults();
+    return defaultPreferences();
   }
   try {
     const parsed = JSON.parse(raw) as { prefs?: Record<string, unknown> };
-    const prefs = defaults();
+    const prefs = defaultPreferences();
     let ignored = false;
     for (const [key, value] of Object.entries(parsed.prefs ?? {})) {
       if (isValidPreference(key as keyof Preferences, value)) {
@@ -48,7 +48,7 @@ export function loadPreferences(path: string): Preferences {
     } catch {
       // Si no se puede apartar, se sobrescribirá en el próximo guardado.
     }
-    return defaults();
+    return defaultPreferences();
   }
 }
 

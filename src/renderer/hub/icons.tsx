@@ -259,6 +259,65 @@ export function InfoIcon(p: IconProps) {
 }
 
 /** Marca de la app: tres barras de onda dentro de un círculo. */
+export function SlidersIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1" />
+      <path d="M15 4v4M9 10v4M17 16v4" />
+    </Svg>
+  );
+}
+
+export function LaptopIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <rect x="4" y="5" width="16" height="11" rx="1.5" />
+      <path d="M2.5 19h19" />
+    </Svg>
+  );
+}
+
+export function ShieldIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M12 3.5 5 6v5.5c0 4.2 2.9 7.6 7 9 4.1-1.4 7-4.8 7-9V6z" />
+      <path d="m9 12 2 2 4-4" />
+    </Svg>
+  );
+}
+
+export function TypeIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M3 6h10M8 6v13M14 11h7M17.5 11v8" />
+    </Svg>
+  );
+}
+
+export function PlusIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M12 5v14M5 12h14" />
+    </Svg>
+  );
+}
+
+export function MinusIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M5 12h14" />
+    </Svg>
+  );
+}
+
+export function ChevronDownIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="m6 9 6 6 6-6" />
+    </Svg>
+  );
+}
+
 export function LogoMark({ size = 22 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden>

@@ -130,7 +130,32 @@ export interface DictationState {
   last: DictationResult | null;
 }
 
+export interface MicrophoneDevice {
+  id: string;
+  label: string;
+}
+
+export interface MicrophonesState {
+  /** Micrófonos conectados, sin el «por defecto» del sistema. */
+  devices: MicrophoneDevice[];
+  /** Nombre del que el sistema usa por defecto, si se sabe. */
+  systemDefault: string | null;
+  /** Con qué micrófono se grabó el último dictado. */
+  lastUsed: string | null;
+}
+
+/** Grabación de un atajo en el editor: teclas pulsadas y nombres en la distribución actual. */
+export interface ShortcutRecording {
+  /** Teclas pulsadas ahora. */
+  held: number[];
+  /** Al soltarlas todas: la combinación que se pulsó (lo máximo que hubo a la vez). */
+  done: number[] | null;
+  names: Record<string, string>;
+}
+
 export interface SharedState {
+  /** Versión de la app. */
+  version: string;
   helper: HelperState;
   permissions: {
     accessibility: AccessibilityPermission;
@@ -141,6 +166,7 @@ export interface SharedState {
   transcription: TranscriptionState;
   formatting: FormattingState;
   bar: BarState;
+  microphones: MicrophonesState;
   data: DataState;
   prefs: Preferences;
 }

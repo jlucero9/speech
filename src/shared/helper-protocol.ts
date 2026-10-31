@@ -21,11 +21,13 @@
 //
 // Teclado: el helper no envía todas las teclas. Envía las de los atajos y,
 // mientras una de ellas está pulsada, las que la acompañan; del resto solo
-// cuenta cuántas hay pulsadas (`hidden`). Main interpreta los atajos.
+// cuenta cuántas hay pulsadas (`hidden`). Main interpreta los atajos. Mientras
+// se graba un atajo en el Hub (`SetShortcutRecording`), envía todas, con su
+// nombre en la distribución de teclado, y se traga las que no son modificadores.
 
 import type { ShortcutBinding } from './shortcuts';
 
-export const HELPER_PROTOCOL_VERSION = 4;
+export const HELPER_PROTOCOL_VERSION = 5;
 
 /** Tope de una línea; algo más largo es un fallo del otro lado. */
 export const HELPER_MAX_LINE_BYTES = 1024 * 1024;
@@ -53,6 +55,19 @@ export interface HelperRequests {
     payload: { shortcuts: ShortcutBinding[] };
     response: { type: 'OK'; payload: Record<string, never> };
   };
+  /** Grabación de un atajo: todas las teclas a main y ninguna a las apps. Se apaga sola al minuto. */
+  SetShortcutRecording: {
+    payload: { on: boolean };
+    response: { type: 'OK'; payload: Record<string, never> };
+  };
+  /**
+   * Silencia la salida de audio (o le devuelve el sonido). Solo devuelve el
+   * sonido que quitó el propio helper; si ya estaba silenciada, no la toca.
+   */
+  SetOutputMuted: {
+    payload: { muted: boolean };
+    response: { type: 'OutputMute'; payload: { changed: boolean; detail: string } };
+  };
   /** Con un dictado en marcha, el helper se traga la tecla de cancelar. */
   SetDictationActive: {
     payload: { active: boolean };
@@ -74,10 +89,10 @@ export interface HelperRequests {
   };
   /**
    * Anota con la clave `id` la app de delante y su elemento con foco, y lee el
-   * texto alrededor del cursor. Vacío si no hay app.
+   * texto alrededor del cursor (salvo `readContext: false`). Vacío si no hay app.
    */
   CaptureTarget: {
-    payload: { id: string };
+    payload: { id: string; readContext: boolean };
     response: { type: 'Target'; payload: Partial<PasteTargetInfo> & { context?: TargetContextPayload } };
   };
   /**
@@ -160,7 +175,7 @@ export type HelperRequestType = keyof HelperRequests;
 export interface HelperEvents {
   AccessibilityStatusChanged: { trusted: boolean };
   /** `index` es correlativo desde 1 en cada arranque del helper. */
-  KeyEvent: { index: number; key: number; down: boolean; hidden: number };
+  KeyEvent: { index: number; key: number; down: boolean; hidden: number; name?: string };
   /** `reason: 'storm'` con `state: 'failed'`: el helper va a salir para que main lo relance. */
   TapStatus: { state: HelperTapState; reason: string; listenAccess: boolean };
   SecureInputStatus: SecureInputPayload;

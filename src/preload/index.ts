@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { HUB_EVENTS, IPC, isHubPage, type SpeechApi } from '../shared/ipc';
-import type { SharedState } from '../shared/state';
+import type { SharedState, ShortcutRecording } from '../shared/state';
 
 const api: SpeechApi = {
   getState: () => ipcRenderer.invoke(IPC.getState),
@@ -54,6 +54,19 @@ const api: SpeechApi = {
   restoreWords: (entries) => ipcRenderer.invoke(IPC.restoreWords, entries),
   chooseDictionaryFile: () => ipcRenderer.invoke(IPC.chooseDictionaryFile),
   importDictionary: (items) => ipcRenderer.invoke(IPC.importDictionary, items),
+  recordShortcut: (on) => ipcRenderer.invoke(IPC.recordShortcut, on),
+  onShortcutRecording: (listener) => {
+    const handler = (_e: unknown, r: ShortcutRecording) => listener(r);
+    ipcRenderer.on(HUB_EVENTS.shortcutRecording, handler);
+    return () => ipcRenderer.removeListener(HUB_EVENTS.shortcutRecording, handler);
+  },
+  monitorMicrophone: (device) => ipcRenderer.invoke(IPC.monitorMicrophone, device),
+  onMicrophoneLevel: (listener) => {
+    const handler = (_e: unknown, level: number) => listener(level);
+    ipcRenderer.on(HUB_EVENTS.microphoneLevel, handler);
+    return () => ipcRenderer.removeListener(HUB_EVENTS.microphoneLevel, handler);
+  },
+  resetSettings: () => ipcRenderer.invoke(IPC.resetSettings),
 };
 
 contextBridge.exposeInMainWorld('speech', api);

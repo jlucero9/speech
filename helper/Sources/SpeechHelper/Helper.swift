@@ -10,10 +10,14 @@ import ApplicationServices
 // Se cierra solo si:
 // - stdin llega a EOF (main cerró la tubería o murió);
 // - su proceso padre termina;
-// - pasan 15 s sin ningún mensaje de main.
+// - pasan 15 s sin ningún mensaje de main;
+// - recibe SIGTERM o SIGINT.
+// Al salir, devuelve el sonido si lo había silenciado.
 
 final class Helper {
-    static let protocolVersion = 4
+    static let protocolVersion = 5
+    /// La grabación de un atajo se apaga sola pasado este tiempo.
+    private static let recordingTimeout: TimeInterval = 60
     private static let orphanTimeout: TimeInterval = 15
     private static let accessibilityPollInterval: TimeInterval = 2
     private static let tapRetryInterval: TimeInterval = 10
@@ -26,6 +30,8 @@ final class Helper {
     private var timers: [DispatchSourceTimer] = []
     private var parentWatcher: DispatchSourceProcess?
     private var activity: NSObjectProtocol?
+    private var signalSources: [DispatchSourceSignal] = []
+    private var recordingTimer: DispatchWorkItem?
     private let keyboard = Keyboard()
     private let secureInput = SecureInputMonitor()
     private let paster = Paster()
@@ -46,6 +52,7 @@ final class Helper {
             onClose: { Helper.quit("main closed the connection") }
         )
         ipc.startReading()
+        watchSignals()
         setUpKeyboard()
         watchParent()
         startTimers()
@@ -84,8 +91,7 @@ final class Helper {
                     Log.warn("Skipping unparseable shortcut \(item)")
                     return nil
                 }
-                let set = Set(keys)
-                return Shortcut(action: action, keys: set, hasModifier: set.contains { Keyboard.isModifier($0) })
+                return Shortcut(action: action, keys: keys)
             }
             keyboard.setShortcuts(list)
             ipc.respond(to: request.id, type: "OK")
@@ -97,9 +103,18 @@ final class Helper {
             let released = keyboard.releasedKeys(among: keys)
             if !released.isEmpty { Log.info("Stale keys released: \(released)") }
             ipc.respond(to: request.id, type: "StaleKeys", payload: ["released": released])
+        case "SetShortcutRecording":
+            setRecording(request.payload["on"] as? Bool ?? false)
+            ipc.respond(to: request.id, type: "OK")
+        case "SetOutputMuted":
+            let muted = request.payload["muted"] as? Bool ?? false
+            let r = OutputMute.set(muted)
+            Log.info("Output mute \(muted ? "on" : "off"): \(r.detail)")
+            ipc.respond(to: request.id, type: "OutputMute", payload: ["changed": r.changed, "detail": r.detail])
         case "CaptureTarget":
             let id = request.payload["id"] as? String ?? ""
-            ipc.respond(to: request.id, type: "Target", payload: paster.captureTarget(id: id))
+            let readContext = request.payload["readContext"] as? Bool ?? true
+            ipc.respond(to: request.id, type: "Target", payload: paster.captureTarget(id: id, readContext: readContext))
         case "PasteText":
             guard let pasteId = request.payload["pasteId"] as? String, let text = request.payload["text"] as? String else {
                 ipc.respond(to: request.id, type: "Error", payload: ["message": "PasteText needs pasteId and text"])
@@ -125,8 +140,10 @@ final class Helper {
     // MARK: Teclado
 
     private func setUpKeyboard() {
-        keyboard.onKey = { [ipc] index, key, down, hidden in
-            ipc?.emit(event: "KeyEvent", payload: ["index": index, "key": key, "down": down, "hidden": hidden])
+        keyboard.onKey = { [ipc] index, key, down, hidden, name in
+            var payload: [String: Any] = ["index": index, "key": key, "down": down, "hidden": hidden]
+            if let name { payload["name"] = name }
+            ipc?.emit(event: "KeyEvent", payload: payload)
         }
         keyboard.onTapStatus = { [weak self] state, reason in
             guard let self else { return }
@@ -159,6 +176,19 @@ final class Helper {
         } else if keyboard.isRunning || keyboard.state != .noPermission {
             keyboard.stop(state: .noPermission, reason: "accessibility permission not granted")
         }
+    }
+
+    private func setRecording(_ on: Bool) {
+        recordingTimer?.cancel()
+        recordingTimer = nil
+        keyboard.setRecording(on)
+        guard on else { return }
+        let timer = DispatchWorkItem { [weak self] in
+            Log.warn("Shortcut recording timed out")
+            self?.keyboard.setRecording(false)
+        }
+        recordingTimer = timer
+        DispatchQueue.main.asyncAfter(deadline: .now() + Helper.recordingTimeout, execute: timer)
     }
 
     private func keyboardStatus() -> [String: Any] {
@@ -219,6 +249,17 @@ final class Helper {
         parentWatcher = source
     }
 
+    /// main lo para con SIGTERM; salir por aquí devuelve el sonido.
+    private func watchSignals() {
+        for sig in [SIGTERM, SIGINT] {
+            signal(sig, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+            source.setEventHandler { Helper.quit("signal \(sig)") }
+            source.resume()
+            signalSources.append(source)
+        }
+    }
+
     private func startTimers() {
         addTimer(every: 1) { [weak self] in
             guard let self else { return }
@@ -245,6 +286,7 @@ final class Helper {
 
     static func quit(_ reason: String, code: Int32 = 0) -> Never {
         Log.info("Helper exiting: \(reason)")
+        OutputMute.restore()
         // Dar tiempo a que salga la línea de registro.
         usleep(50_000)
         exit(code)

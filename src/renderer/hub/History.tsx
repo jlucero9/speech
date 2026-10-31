@@ -20,6 +20,7 @@ import {
   UndoIcon,
 } from './icons';
 import { ConfirmDialog, IconButton, Menu, useToast, type MenuItem } from './ui';
+import { useSharedState } from '../useSharedState';
 
 const PAGE = 50;
 
@@ -131,13 +132,20 @@ export function HistoryList() {
 }
 
 function EmptyHistory() {
+  const state = useSharedState();
+  // Con «Never store data locally» no hay historial que enseñar: se dice por qué.
+  const off = state?.prefs.historyStorage === 'never';
   return (
     <div className="history-empty">
       <div className="history-empty-icon">
         <MicIcon size={20} />
       </div>
-      <h2 className="history-empty-title">No dictations yet</h2>
-      <p className="history-empty-body">Once you dictate in any app, your dictation history will appear here.</p>
+      <h2 className="history-empty-title">{off ? 'Your history is off' : 'No dictations yet'}</h2>
+      <p className="history-empty-body">
+        {off
+          ? 'Dictations are not stored on this Mac. You can change this in Settings › Data and Privacy.'
+          : 'Once you dictate in any app, your dictation history will appear here.'}
+      </p>
     </div>
   );
 }

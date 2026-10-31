@@ -1,4 +1,4 @@
-import type { RecorderApi, RecorderCommand } from '../../shared/ipc';
+import type { RecorderApi, RecorderCommand, RecorderDevice } from '../../shared/ipc';
 import workletUrl from './worklet.js?url';
 
 // Captura del micrófono en la ventana oculta.
@@ -10,6 +10,11 @@ import workletUrl from './worklet.js?url';
 //
 // Audio crudo: sin cancelación de eco, supresión de ruido ni control de
 // ganancia. Las órdenes se atienden en orden, una tras otra.
+//
+// Micrófono: el elegido en ajustes, buscado por su id y, si cambió (al volver
+// a conectarlo), por su nombre; si no está, el del sistema. También avisa a
+// main de los micrófonos conectados y mide el nivel de uno mientras el
+// diálogo de ajustes lo pide (nunca durante un dictado).
 
 declare global {
   interface Window {
@@ -20,6 +25,9 @@ declare global {
 const SAMPLE_RATE = 16_000;
 /** 125 trozos de 40 ms: 5 s con todas las muestras a cero. */
 const SILENT_CHUNKS = 125;
+const MONITOR_EVERY_MS = 100;
+/** El mismo suelo que el nivel de la barra. */
+const LEVEL_FLOOR_DB = -60;
 
 interface Session {
   id: string;
@@ -37,6 +45,67 @@ let context: AudioContext | null = null;
 let moduleLoaded: Promise<void> | null = null;
 let session: Session | null = null;
 let queue: Promise<void> = Promise.resolve();
+let monitor: { stream: MediaStream; ctx: AudioContext; timer: ReturnType<typeof setInterval> } | null = null;
+
+const RAW_AUDIO = { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 };
+
+/** Restricciones para abrir el micrófono elegido, o el del sistema si ya no está. */
+async function constraints(device: RecorderDevice): Promise<MediaTrackConstraints> {
+  if (!device) return RAW_AUDIO;
+  const inputs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'audioinput');
+  const found = inputs.find((d) => d.deviceId === device.id) ?? inputs.find((d) => d.label === device.label);
+  if (!found) {
+    console.warn(`Microphone "${device.label}" is not connected; using the system default`);
+    return RAW_AUDIO;
+  }
+  return { ...RAW_AUDIO, deviceId: { exact: found.deviceId } };
+}
+
+async function reportDevices(): Promise<void> {
+  const inputs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'audioinput');
+  const def = inputs.find((d) => d.deviceId === 'default');
+  api.send({
+    type: 'devices',
+    devices: inputs
+      .filter((d) => d.deviceId !== 'default' && d.deviceId !== 'communications' && d.label)
+      .map((d) => ({ id: d.deviceId, label: d.label })),
+    systemDefault: def?.label.replace(/^Default - /, '') || null,
+  });
+}
+
+async function startMonitor(device: RecorderDevice): Promise<void> {
+  await stopMonitor();
+  if (session) return;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: await constraints(device) });
+    const ctx = new AudioContext({ latencyHint: 'playback', sinkId: { type: 'none' } } as AudioContextOptions);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 2048;
+    ctx.createMediaStreamSource(stream).connect(analyser);
+    const buf = new Float32Array(analyser.fftSize);
+    const timer = setInterval(() => {
+      analyser.getFloatTimeDomainData(buf);
+      let sum = 0;
+      for (const v of buf) sum += v * v;
+      const db = 20 * Math.log10(Math.sqrt(sum / buf.length) + 1e-10);
+      api.send({ type: 'level', level: Math.min(1, Math.max(0, (db - LEVEL_FLOOR_DB) / -LEVEL_FLOOR_DB)) });
+    }, MONITOR_EVERY_MS);
+    monitor = { stream, ctx, timer };
+  } catch (err) {
+    const e = err as DOMException;
+    console.warn(`Could not open the microphone to measure it: ${e.name}: ${e.message}`);
+    api.send({ type: 'level', level: 0 });
+  }
+}
+
+async function stopMonitor(): Promise<void> {
+  const m = monitor;
+  monitor = null;
+  if (!m) return;
+  clearInterval(m.timer);
+  m.stream.getTracks().forEach((t) => t.stop());
+  await m.ctx.close().catch(() => {});
+}
 
 function audioContext(): { ctx: AudioContext; loaded: Promise<void> } {
   if (!context || context.state === 'closed') {
@@ -58,23 +127,15 @@ async function closeContext(): Promise<void> {
   if (ctx && ctx.state !== 'closed') await ctx.close();
 }
 
-async function start(id: string): Promise<void> {
+async function start(id: string, device: RecorderDevice): Promise<void> {
   if (session) await stop(session.id);
+  // Medir y dictar a la vez no: el dictado manda.
+  await stopMonitor();
   const t0 = performance.now();
   let stream: MediaStream | null = null;
   try {
     const { ctx, loaded } = audioContext();
-    [stream] = await Promise.all([
-      navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false,
-          channelCount: 1,
-        },
-      }),
-      loaded,
-    ]);
+    [stream] = await Promise.all([navigator.mediaDevices.getUserMedia({ audio: await constraints(device) }), loaded]);
     await ctx.resume();
     const source = ctx.createMediaStreamSource(stream);
     const node = new AudioWorkletNode(ctx, 'recorder-processor', {
@@ -117,7 +178,8 @@ async function start(id: string): Promise<void> {
       id,
       openMs: Math.round(performance.now() - t0),
       sampleRate: ctx.sampleRate,
-      device: track?.label || 'unknown device',
+      // El del sistema se llama «Default - <nombre>»: es el mismo micrófono.
+      device: track?.label.replace(/^Default - /, '') || 'unknown device',
     });
     track?.addEventListener('ended', () => {
       if (session === s) api.send({ type: 'failed', id, error: 'the microphone was disconnected' });
@@ -149,10 +211,24 @@ async function stop(id: string): Promise<void> {
   await closeContext();
 }
 
+function run(command: RecorderCommand): Promise<void> {
+  switch (command.type) {
+    case 'start':
+      return start(command.id, command.device);
+    case 'stop':
+      return stop(command.id);
+    case 'monitor':
+      return startMonitor(command.device);
+    case 'monitor-stop':
+      return stopMonitor();
+  }
+}
+
 api.onCommand((command: RecorderCommand) => {
-  queue = queue
-    .then(() => (command.type === 'start' ? start(command.id) : stop(command.id)))
-    .catch((err) => console.error('Recorder command failed', err));
+  queue = queue.then(() => run(command)).catch((err) => console.error('Recorder command failed', err));
 });
 
+navigator.mediaDevices.addEventListener('devicechange', () => void reportDevices().catch(() => {}));
+
 api.send({ type: 'ready' });
+void reportDevices().catch((err) => console.warn('Could not list microphones', err));

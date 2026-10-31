@@ -57,8 +57,9 @@ export class Store {
   }
 }
 
-export function initialState(): SharedState {
+export function initialState(version = '0.0.0'): SharedState {
   return {
+    version,
     helper: { status: 'starting', pid: null, restarts: 0, nextAttemptAt: null, lastError: null },
     permissions: { accessibility: 'unknown', microphone: 'unknown' },
     keyboard: { tap: 'unknown', tapReason: null, inputMonitoring: 'unknown', secureInput: null, fnUsage: 'unknown' },
@@ -91,6 +92,7 @@ export function initialState(): SharedState {
       detail: null,
     },
     bar: { notice: null },
+    microphones: { devices: [], systemDefault: null, lastUsed: null },
     data: { databaseReady: false, schemaVersion: 0, migrationsAppliedThisLaunch: 0, error: null },
     prefs: { ...DEFAULT_PREFERENCES },
   };

@@ -9,16 +9,17 @@ import { shownText, type HistoryActionResult } from '../shared/history';
 import type { DictionaryImportChoice, DictionaryInput, DictionaryResult } from '../shared/dictionary';
 import type { BarSound, NoticeAction } from '../shared/bar';
 import { isValidPreference, type Preferences } from '../shared/preferences';
-import { DEFAULT_SHORTCUTS } from '../shared/shortcuts';
+import { accelerator, compactLabel, firstBinding, type ShortcutBinding } from '../shared/shortcuts';
 import { DEFAULT_LOCAL_MODEL, type ModelState } from '../shared/transcription';
 import { BarWindow } from './bar/bar-window';
-import { notice } from './bar/notice-texts';
+import { notice, setNoticeShortcuts } from './bar/notice-texts';
 import { Notices } from './bar/notices';
 import { openDatabase } from './db';
 import { Dictation, type DictationWords } from './dictation/dictation';
 import { Dictionary } from './dictionary';
 import { Paster } from './dictation/paste';
 import { ShortcutListener } from './dictation/shortcuts';
+import { VoiceLevels } from './dictation/voice';
 import { HelperProcess } from './helper/helper-process';
 import { scheduleDaily } from './daily';
 import { History } from './history';
@@ -27,7 +28,7 @@ import { appPids, KeyboardStatus } from './keyboard-status';
 import { logger } from './log';
 import { helperExecutable, transcriberExecutable } from './paths';
 import { Permissions } from './permissions';
-import { loadPreferences, savePreferences } from './preferences';
+import { defaultPreferences, loadPreferences, savePreferences } from './preferences';
 import { RecorderWindow } from './recorder-window';
 import { initialState, Store } from './store';
 import { TextFormatting } from './formatting/service';
@@ -39,6 +40,11 @@ const log = logger('main');
 
 const MICROPHONE_SETTINGS_URL = 'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone';
 const HIDE_BAR_MS = 60 * 60_000;
+/** «Auto-delete local data every 24hrs». */
+const AUTODELETE_AFTER_MS = 24 * 60 * 60_000;
+const AUTODELETE_EVERY_MS = 60 * 60_000;
+/** Sin guardar el historial, un cancelado se conserva lo justo para su «Undo». */
+const NEVER_STORE_KEEP_CANCELLED_MS = 30_000;
 
 app.setName('Speech');
 // El servicio de audio de Chromium va por defecto en un proceso propio que,
@@ -57,7 +63,7 @@ if (!app.requestSingleInstanceLock()) {
 
 function main(): void {
   log.info(`Starting Speech ${app.getVersion()} (Electron ${process.versions.electron}, pid ${process.pid})`);
-  const store = new Store(initialState());
+  const store = new Store(initialState(app.getVersion()));
   const dataDir = app.getPath('userData');
   mkdirSync(dataDir, { recursive: true });
 
@@ -96,7 +102,7 @@ function main(): void {
   helper.on('state', (h) => store.update((s) => ({ ...s, helper: h })));
   const permissions = new Permissions(store, helper);
   permissions.refreshMicrophone();
-  const keyboard = new KeyboardStatus(store, helper, appPids, () => DEFAULT_SHORTCUTS, (owner) =>
+  const keyboard = new KeyboardStatus(store, helper, appPids, () => store.get().prefs.shortcuts, (owner) =>
     setTrayWarning(owner ? `Shortcut blocked by secure input in ${owner.appName ?? 'another app'}` : null),
   );
 
@@ -154,7 +160,26 @@ function main(): void {
   const recorder = new RecorderWindow();
   recorder.installPermissionHandlers();
   recorder.create();
-  const shortcuts = new ShortcutListener(helper, DEFAULT_SHORTCUTS);
+  const shortcuts = new ShortcutListener(helper, store.get().prefs.shortcuts);
+  const shortcutLabels = (list: ShortcutBinding[]) => {
+    const ptt = firstBinding(list, 'ptt');
+    const paste = firstBinding(list, 'paste_last');
+    return {
+      ptt: ptt ? compactLabel(ptt.keys, ptt.names) : 'fn',
+      pasteLast: paste ? compactLabel(paste.keys, paste.names) : null,
+    };
+  };
+  {
+    const l = shortcutLabels(store.get().prefs.shortcuts);
+    setNoticeShortcuts(l.ptt, l.pasteLast);
+  }
+  // Micrófonos conectados y nivel del que se prueba en el diálogo de ajustes.
+  recorder.on('devices', (devices, systemDefault) => {
+    store.update((s) => ({ ...s, microphones: { ...s.microphones, devices, systemDefault } }));
+    log.info(`Microphones: ${devices.map((d) => d.label).join(', ') || 'none'} (system default: ${systemDefault ?? '?'})`);
+  });
+  recorder.on('level', (level) => sendToHub(HUB_EVENTS.microphoneLevel, level));
+  const voiceLevels = new VoiceLevels(join(dataDir, 'voice-levels.json'));
   const paster = new Paster(helper);
   // Formateo: Ollama en el equipo por defecto; si no responde, se pega la transcripción.
   const formatting = new TextFormatting(store);
@@ -183,7 +208,10 @@ function main(): void {
         if (n.dictationId) void dictation?.recover(n.dictationId);
         break;
       case 'open_hub':
-        showHub('settings');
+        showHub('settings/system');
+        break;
+      case 'open_style':
+        showHub('style');
         break;
       case 'open_history':
         showHub('dictation');
@@ -225,7 +253,11 @@ function main(): void {
       { label: 'Settings', click: () => showHub('settings') },
       { type: 'separator' },
       { label: 'Transcript history', click: () => showHub('dictation') },
-      { label: 'Paste last transcript', accelerator: 'Command+Control+V', click: () => dictation?.pasteLastFromMenu() },
+      {
+        label: 'Paste last transcript',
+        accelerator: accelerator(firstBinding(store.get().prefs.shortcuts, 'paste_last')),
+        click: () => dictation?.pasteLastFromMenu(),
+      },
     ],
   });
   bar.create();
@@ -241,13 +273,39 @@ function main(): void {
       else hideTimer = setTimeout(() => setPreference('barHiddenUntil', 0), left);
     }
   };
+  // Lo que no lee cada pieza por su cuenta se aplica aquí al cambiar, sin reiniciar.
+  const applySystem = (p: Preferences, prev: Preferences | null): void => {
+    if (!prev || p.showInDock !== prev.showInDock) {
+      if (p.showInDock) void app.dock?.show();
+      else app.dock?.hide();
+    }
+    if (prev && p.launchAtLogin !== prev.launchAtLogin) {
+      app.setLoginItemSettings({ openAtLogin: p.launchAtLogin });
+      log.info(`Launch at login: ${app.getLoginItemSettings().openAtLogin}`);
+    }
+  };
   let lastPrefs = store.get().prefs;
   syncBarPrefs(lastPrefs);
+  applySystem(lastPrefs, null);
+  // Abrir al iniciar sesión lo guarda macOS: la preferencia es su reflejo.
+  const loginItem = app.getLoginItemSettings().openAtLogin;
+  if (loginItem !== lastPrefs.launchAtLogin) {
+    setPreference('launchAtLogin', loginItem);
+    lastPrefs = store.get().prefs;
+  }
   store.subscribe((s) => {
     if (s.prefs === lastPrefs) return;
-    const changed = s.prefs.barEdge !== lastPrefs.barEdge || s.prefs.barHiddenUntil !== lastPrefs.barHiddenUntil;
+    const prev = lastPrefs;
     lastPrefs = s.prefs;
-    if (changed) syncBarPrefs(s.prefs);
+    if (s.prefs.barEdge !== prev.barEdge || s.prefs.barHiddenUntil !== prev.barHiddenUntil) syncBarPrefs(s.prefs);
+    if (s.prefs.shortcuts !== prev.shortcuts) {
+      shortcuts.setShortcuts(s.prefs.shortcuts);
+      const l = shortcutLabels(s.prefs.shortcuts);
+      setNoticeShortcuts(l.ptt, l.pasteLast);
+      void keyboard.refresh();
+    }
+    if (s.prefs.historyStorage !== prev.historyStorage) applyHistoryStorage(s.prefs.historyStorage, 'changed');
+    applySystem(s.prefs, prev);
   });
 
   dictation = new Dictation(
@@ -270,8 +328,45 @@ function main(): void {
         if (n) notices.close(n.id, 'new dictation');
       },
       followCursor: () => bar.followCursor(),
+      pttLabel: () => shortcutLabels(store.get().prefs.shortcuts).ptt,
+      microphoneUsed: (label) => {
+        if (store.get().microphones.lastUsed !== label) {
+          store.update((s) => ({ ...s, microphones: { ...s.microphones, lastUsed: label } }));
+        }
+      },
+      concluded: (id, outcome) => {
+        // Sin guardar el historial: el dictado se borra en cuanto termina (un
+        // cancelado, cuando ya no se puede deshacer).
+        if (store.get().prefs.historyStorage !== 'never') return;
+        const drop = () => {
+          if (store.get().prefs.historyStorage === 'never') history?.delete(id);
+        };
+        if (outcome === 'cancelled') setTimeout(drop, NEVER_STORE_KEEP_CANCELLED_MS);
+        else drop();
+      },
     },
+    voiceLevels,
   );
+
+  // Cuánto se guarda del historial. Al elegir «nunca», se borra todo lo que hay
+  // (el Hub pide confirmación antes); con «24 horas», lo anterior.
+  function applyHistoryStorage(mode: Preferences['historyStorage'], why: string): void {
+    if (!history || mode === 'store') return;
+    try {
+      const cutoff = mode === 'never' ? Date.now() + 1 : Date.now() - AUTODELETE_AFTER_MS;
+      const n = history.deleteBefore(cutoff);
+      log.info(`History storage "${mode}" (${why}): deleted ${n} dictations`);
+    } catch (err) {
+      log.error('Could not delete old dictations', err);
+    }
+  }
+  applyHistoryStorage(store.get().prefs.historyStorage, 'startup');
+  setInterval(() => {
+    if (store.get().prefs.historyStorage === 'autodelete') applyHistoryStorage('autodelete', 'hourly');
+  }, AUTODELETE_EVERY_MS).unref();
+  powerMonitor.on('resume', () => {
+    if (store.get().prefs.historyStorage === 'autodelete') applyHistoryStorage('autodelete', 'resume');
+  });
 
   helper.start();
   powerMonitor.on('resume', () => helper.noteResume());
@@ -283,6 +378,8 @@ function main(): void {
 
   createTray(() => showHub());
   app.on('second-instance', () => showHub());
+  // Con el icono en el Dock, hacer clic en él abre el Hub.
+  app.on('activate', () => showHub());
   // Una app de la barra de menús sigue viva sin ventanas.
   app.on('window-all-closed', () => {});
 
@@ -426,6 +523,42 @@ function main(): void {
   ipcMain.handle(IPC.importDictionary, (_e, items: unknown) =>
     Array.isArray(items) ? (dictionary?.import(items.map(toInput)) ?? 0) : 0,
   );
+
+  // Ajustes (Hub)
+  // Grabar un atajo: mientras dura, el helper se traga las teclas normales en
+  // todo el sistema, así que se para en cuanto el Hub pierde el foco o se cierra.
+  shortcuts.on('recording', (r) => sendToHub(HUB_EVENTS.shortcutRecording, r));
+  const stopRecordingOnBlur = () => shortcuts.stopRecording('Hub lost focus');
+  ipcMain.handle(IPC.recordShortcut, (_e, on: unknown) => {
+    const win = hubWindow();
+    win?.removeListener('blur', stopRecordingOnBlur);
+    win?.removeListener('closed', stopRecordingOnBlur);
+    if (on === true && win?.isFocused()) {
+      shortcuts.startRecording();
+      win.once('blur', stopRecordingOnBlur);
+      win.once('closed', stopRecordingOnBlur);
+    } else {
+      shortcuts.stopRecording(on === true ? 'Hub not focused' : 'done');
+    }
+  });
+  const stopMonitor = () => recorder.monitor(undefined);
+  ipcMain.handle(IPC.monitorMicrophone, (_e, device: unknown) => {
+    const d = device as { id?: unknown; label?: unknown } | null;
+    if (d === null || typeof d !== 'object') return recorder.monitor(undefined);
+    if (dictation?.inProgress) return;
+    // Si el Hub se cierra sin decir que deje de medir, el micrófono no queda abierto.
+    const win = hubWindow();
+    win?.removeListener('closed', stopMonitor);
+    win?.once('closed', stopMonitor);
+    recorder.monitor(typeof d.id === 'string' && d.id ? { id: d.id, label: String(d.label ?? '') } : null);
+  });
+  ipcMain.handle(IPC.resetSettings, () => {
+    // Vuelven los valores por defecto; macOS conserva el inicio de sesión hasta que se aplique.
+    const next = defaultPreferences();
+    savePreferences(prefsPath, next);
+    store.update((s) => ({ ...s, prefs: next }));
+    log.info('Settings reset to their defaults');
+  });
 
   app.on('before-quit', () => {
     log.info('Quitting');
