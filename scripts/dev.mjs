@@ -11,6 +11,8 @@ import { join } from 'node:path';
 
 const raiz = join(import.meta.dirname, '..');
 const debug = process.argv.includes('--debug');
+// Sin pasar la app al frente: para reiniciarla sin interrumpir lo que se esté haciendo.
+const fondo = process.argv.includes('--background');
 const APP = join(homedir(), 'Library', 'Developer', 'Speech', 'dev', 'Speech.app');
 const EJECUTABLE = join(APP, 'Contents', 'MacOS', 'Electron');
 // Copia del código compilado que abre la app, fuera del Escritorio (ver abajo).
@@ -88,7 +90,7 @@ const env = debug ? { ...entorno, SPEECH_DEBUG: '1' } : entorno;
 // Justo después de cerrar la instancia anterior, LaunchServices aún puede
 // darla por viva y `open` falla con -600: se reintenta unas veces.
 for (let intento = 1; ; intento++) {
-  const r = spawnSync('open', ['-a', APP, '--stdout', LOG, '--stderr', LOG, '--args', ...args], { cwd: raiz, stdio: 'inherit', env });
+  const r = spawnSync('open', [...(fondo ? ['-g'] : []), '-a', APP, '--stdout', LOG, '--stderr', LOG, '--args', ...args], { cwd: raiz, stdio: 'inherit', env });
   if (r.status === 0) break;
   if (intento === 5) {
     console.error('\nFalló: open');

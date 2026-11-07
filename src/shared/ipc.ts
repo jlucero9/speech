@@ -2,6 +2,7 @@
 // puente genérico que acepte cualquier nombre de canal.
 
 import type { BarSound, NoticeAction } from './bar';
+import type { ApiKeyResult, CloudProvider } from './engines';
 import type { Preferences } from './preferences';
 import type { MicrophoneDevice, SharedState, ShortcutRecording } from './state';
 import type { HistoryActionResult, HistoryPage, HistoryQuery, HistoryStats } from './history';
@@ -41,6 +42,10 @@ export const IPC = {
   recordShortcut: 'shortcuts:record',
   monitorMicrophone: 'microphone:monitor',
   resetSettings: 'settings:reset',
+  saveApiKey: 'keys:save',
+  removeApiKey: 'keys:remove',
+  allowApiKey: 'keys:allow',
+  testApiKey: 'keys:test',
 } as const;
 
 /** main → Hub. */
@@ -61,7 +66,7 @@ export const HUB_EVENTS = {
  * Páginas del Hub. «settings» abre el diálogo de ajustes sobre la página
  * actual, en General; «settings/…», en esa sección.
  */
-export const HUB_PAGES = ['dictation', 'dictionary', 'style', 'settings', 'settings/system', 'settings/data'] as const;
+export const HUB_PAGES = ['dictation', 'dictionary', 'style', 'settings', 'settings/system', 'settings/engines', 'settings/data'] as const;
 export type HubPage = (typeof HUB_PAGES)[number];
 
 export function isHubPage(value: unknown): value is HubPage {
@@ -202,4 +207,12 @@ export interface SpeechApi {
   onMicrophoneLevel(listener: (level: number) => void): () => void;
   /** Vuelve a los ajustes por defecto; el historial y el diccionario no se tocan. */
   resetSettings(): Promise<void>;
+  /** Guarda la clave en el llavero. No hay forma de leerla desde aquí. */
+  saveApiKey(provider: CloudProvider, key: string): Promise<ApiKeyResult>;
+  /** Borra la clave; quien la usara vuelve al motor del equipo. */
+  removeApiKey(provider: CloudProvider): Promise<ApiKeyResult>;
+  /** Deja que macOS pregunte si Speech puede leer la clave. */
+  allowApiKey(provider: CloudProvider): Promise<ApiKeyResult>;
+  /** Comprueba la clave con el proveedor. */
+  testApiKey(provider: CloudProvider): Promise<ApiKeyResult>;
 }

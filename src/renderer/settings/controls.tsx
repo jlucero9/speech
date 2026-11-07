@@ -70,14 +70,14 @@ export function Select<T extends string>({
 }: {
   label: string;
   value: T;
-  options: [T, string][];
+  options: [T, string, boolean?][];
   onChange: (v: T) => void;
 }) {
   return (
     <span className="settings-select">
       <select aria-label={label} value={value} onChange={(e) => onChange(e.target.value as T)}>
-        {options.map(([v, text]) => (
-          <option key={v} value={v}>
+        {options.map(([v, text, disabled]) => (
+          <option key={v} value={v} disabled={disabled}>
             {text}
           </option>
         ))}

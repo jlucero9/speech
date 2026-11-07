@@ -9,6 +9,7 @@ import {
 } from './engine';
 import type { ModelManager } from './models';
 import { TranscriberProcess, TranscriberProcessError } from './transcriber-process';
+import { buildWhisperPrompt } from './whisper-prompt';
 
 // Motor local: whisper.cpp en un proceso aparte (SpeechTranscriber).
 //
@@ -31,29 +32,11 @@ const TIMEOUT_BASE_MS = 30_000;
 const TIMEOUT_PER_AUDIO_MS = 0.5;
 /** Núcleos de alto rendimiento de un M1; con más hilos no va más rápido. */
 const THREADS = 4;
-/** Whisper usa como mucho unos 224 tokens de pista. */
-const MAX_PROMPT_CHARS = 600;
 /**
  * Búsqueda en haz: en dictados largos acierta más palabras que la voraz, a
  * cambio de ~0,1 s en una frase corta y ~0,6 s en 30 s de audio.
  */
 const BEAM_SIZE = 5;
-/**
- * Texto previo con puntuación en el idioma del dictado. Sin él, los dictados
- * largos salen a menudo sin puntos, comas ni mayúsculas. Frases neutras: con
- * palabras que se dicen mucho («esto», «esta»…), el modelo tiende a copiarlas.
- */
-const STYLE_PROMPTS: Record<string, string> = {
-  es: 'Hola, ¿qué tal? Bien, gracias.',
-  en: 'Hello, how are you? Fine, thanks.',
-  pt: 'Olá, tudo bem? Tudo bem, obrigado.',
-  ca: 'Hola, què tal? Bé, gràcies.',
-  fr: 'Bonjour, ça va ? Oui, merci.',
-  it: 'Ciao, come stai? Bene, grazie.',
-  de: 'Hallo, wie geht’s? Gut, danke.',
-  nl: 'Hallo, hoe gaat het? Goed, dank je.',
-};
-
 interface Loaded {
   proc: TranscriberProcess;
   /** Se resuelve con el modelo cargado; se rechaza si la carga falla. */
@@ -99,7 +82,7 @@ export class LocalWhisper implements TranscriptionEngine {
     try {
       const w = await this.ensureLoaded(req.language);
       if (req.signal?.aborted) throw new TranscriptionError('cancelled', 'Cancelled.');
-      const prompt = buildPrompt(req.language, req.vocabulary);
+      const prompt = buildWhisperPrompt(req.language, req.vocabulary);
       const { id, reply } = w.proc.request<'result'>({
         type: 'transcribe',
         audio: req.audioPath,
@@ -235,22 +218,6 @@ export class LocalWhisper implements TranscriptionEngine {
       transcription: { ...s.transcription, transcriber: { ...s.transcription.transcriber, ...p } },
     }));
   }
-}
-
-/**
- * Texto previo: la frase de estilo del idioma y los términos del diccionario
- * (whisper tiende a escribirlos igual que en la pista).
- */
-function buildPrompt(language: string, terms: string[]): string {
-  let prompt = STYLE_PROMPTS[language] ?? '';
-  let list = '';
-  for (const t of terms) {
-    const next = list ? `${list}, ${t}` : t;
-    if (prompt.length + 1 + next.length > MAX_PROMPT_CHARS) break;
-    list = next;
-  }
-  if (list) prompt = prompt ? `${prompt} ${list}` : list;
-  return prompt;
 }
 
 function toTranscriptionError(err: unknown): TranscriptionError {

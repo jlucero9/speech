@@ -286,6 +286,16 @@ export function ShieldIcon(p: IconProps) {
   );
 }
 
+export function KeyIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <circle cx="8" cy="15.5" r="4.5" />
+      <path d="m11.2 12.3 8.3-8.3" />
+      <path d="m16 7.5 3 3" />
+    </Svg>
+  );
+}
+
 export function TypeIcon(p: IconProps) {
   return (
     <Svg {...p}>

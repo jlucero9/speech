@@ -11,6 +11,12 @@ export const FORMATTING_MODELS: Record<FormattingProvider, string> = {
   gemini: 'gemini-3.5-flash-lite',
 };
 
+export const FORMATTING_PROVIDER_LABELS: Record<FormattingProvider, string> = {
+  ollama: 'On this Mac (Ollama)',
+  groq: 'Groq (your key)',
+  gemini: 'Gemini (your key)',
+};
+
 export type FormattingStatus =
   | 'off' // «Smart Formatting» apagado
   | 'checking'

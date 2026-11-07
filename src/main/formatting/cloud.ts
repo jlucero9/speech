@@ -1,5 +1,6 @@
 import { FormatError, type FormatErrorCode, type FormatRequest, type FormatResult, type Formatter } from './formatter';
-import { readKey, type KeyName } from './keys';
+import type { CloudProvider } from '../../shared/engines';
+import { ApiKeyError, type ReadApiKey } from '../keys';
 import { abortError } from './ollama';
 import { buildMessages, checkFidelity, cleanOutput, maxOutputTokens, type ChatMessage } from './prompt';
 
@@ -10,18 +11,24 @@ import { buildMessages, checkFidelity, cleanOutput, maxOutputTokens, type ChatMe
 // espacios y mayúsculas.
 
 abstract class CloudFormatter implements Formatter {
-  abstract readonly provider: string;
-  protected abstract readonly keyName: KeyName;
+  abstract readonly provider: CloudProvider;
 
-  constructor(readonly model: string) {}
+  constructor(
+    readonly model: string,
+    private readonly readKey: ReadApiKey,
+  ) {}
 
   prepare(): void {}
 
   release(): void {}
 
   async format(req: FormatRequest): Promise<FormatResult> {
-    const key = readKey(this.keyName);
-    if (!key) throw new FormatError('not_ready', `No ${this.keyName}`);
+    let key: string;
+    try {
+      key = await this.readKey(this.provider);
+    } catch (err) {
+      throw new FormatError('not_ready', err instanceof ApiKeyError ? err.message : `Could not read the ${this.provider} key`);
+    }
     const t0 = performance.now();
     let res: Response;
     try {
@@ -44,7 +51,6 @@ abstract class CloudFormatter implements Formatter {
 
 export class GroqFormatter extends CloudFormatter {
   readonly provider = 'groq';
-  protected readonly keyName = 'GROQ_API_KEY';
 
   protected request(key: string, messages: ChatMessage[], maxTokens: number, signal?: AbortSignal): Promise<Response> {
     // gpt-oss siempre razona (como mínimo, «low»); en Qwen se puede apagar.
@@ -76,7 +82,6 @@ export class GroqFormatter extends CloudFormatter {
 
 export class GeminiFormatter extends CloudFormatter {
   readonly provider = 'gemini';
-  protected readonly keyName = 'GEMINI_API_KEY';
 
   protected request(key: string, messages: ChatMessage[], maxTokens: number, signal?: AbortSignal): Promise<Response> {
     const system = messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n');

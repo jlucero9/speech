@@ -67,6 +67,10 @@ const api: SpeechApi = {
     return () => ipcRenderer.removeListener(HUB_EVENTS.microphoneLevel, handler);
   },
   resetSettings: () => ipcRenderer.invoke(IPC.resetSettings),
+  saveApiKey: (provider, key) => ipcRenderer.invoke(IPC.saveApiKey, provider, key),
+  removeApiKey: (provider) => ipcRenderer.invoke(IPC.removeApiKey, provider),
+  allowApiKey: (provider) => ipcRenderer.invoke(IPC.allowApiKey, provider),
+  testApiKey: (provider) => ipcRenderer.invoke(IPC.testApiKey, provider),
 };
 
 contextBridge.exposeInMainWorld('speech', api);

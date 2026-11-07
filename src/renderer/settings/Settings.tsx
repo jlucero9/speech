@@ -4,23 +4,25 @@ import type { HistoryStorage } from '../../shared/preferences';
 import { comboLabel, firstBinding } from '../../shared/shortcuts';
 import type { SharedState } from '../../shared/state';
 import { LOCAL_MODELS, languageLabel } from '../../shared/transcription';
-import { LaptopIcon, ShieldIcon, SlidersIcon } from '../hub/icons';
+import { KeyIcon, LaptopIcon, ShieldIcon, SlidersIcon } from '../hub/icons';
 import { ConfirmDialog, useToast } from '../hub/ui';
 import { useSharedState } from '../useSharedState';
 import { Badge, KeyPill, RowButton, Section, Select, SettingRow, Switch } from './controls';
+import { EnginesPage } from './Engines';
 import { LanguagesDialog } from './LanguagesDialog';
 import { MicrophoneDialog, microphoneName } from './MicrophoneDialog';
 import { ShortcutsDialog } from './ShortcutsDialog';
 
 // Diálogo de ajustes: General (atajos, micrófono, idiomas), System (la app, el
-// sonido, permisos y modelo) y Data and Privacy (contexto e historial). Cada
+// sonido, permisos y modelo), Engines and Keys (quién transcribe y limpia) y Data and Privacy (contexto e historial). Cada
 // cambio se guarda y se aplica al momento; no hay botón de guardar.
 
-export type SettingsSection = 'general' | 'system' | 'data';
+export type SettingsSection = 'general' | 'system' | 'engines' | 'data';
 
 const SECTIONS: { id: SettingsSection; label: string; icon: ReactNode }[] = [
   { id: 'general', label: 'General', icon: <SlidersIcon /> },
   { id: 'system', label: 'System', icon: <LaptopIcon /> },
+  { id: 'engines', label: 'Engines and Keys', icon: <KeyIcon /> },
   { id: 'data', label: 'Data and Privacy', icon: <ShieldIcon /> },
 ];
 
@@ -84,6 +86,8 @@ export function SettingsDialog({
             <GeneralPage state={state} open={setSub} />
           ) : section === 'system' ? (
             <SystemPage state={state} onOpenStyle={onOpenStyle} />
+          ) : section === 'engines' ? (
+            <EnginesPage state={state} onOpenStyle={onOpenStyle} />
           ) : (
             <DataPage state={state} />
           )}
@@ -432,7 +436,7 @@ function DataPage({ state }: { state: SharedState }) {
       <Section>
         <SettingRow
           label="Context awareness"
-          description="Allow Speech to read the text around your cursor in the app you're dictating in, to fit spacing and capitalization. It never leaves this Mac."
+          description="Allow Speech to read the text around your cursor in the app you're dictating in, to fit spacing and capitalization. It never leaves this Mac, whichever engine you use."
         >
           <Switch
             label="Context awareness"

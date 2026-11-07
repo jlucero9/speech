@@ -65,7 +65,7 @@ export const notice = {
       status: 'alert',
       title: 'Pasted without formatting',
       body,
-      actions: actionable ? [{ action: 'open_style', label: 'Open Speech' }] : [],
+      actions: actionable ? [{ action: 'open_engines', label: 'Open Speech' }] : [],
       timeoutMs: 6_000,
       dictationId,
     };

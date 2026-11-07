@@ -2,6 +2,7 @@
 // suyas; un fichero antiguo se completa con los valores por defecto al leerlo.
 
 import { isBarEdge, type BarEdge } from './bar';
+import { isTranscriptionEngine, type TranscriptionEngineId } from './engines';
 import { isFormattingProvider, type FormattingProvider } from './formatting';
 import { DEFAULT_SHORTCUTS, isShortcutList, type ShortcutBinding } from './shortcuts';
 import { isDictationLanguage } from './transcription';
@@ -13,6 +14,8 @@ export interface Preferences {
   smartFormatting: boolean;
   /** Código de idioma para la transcripción (ISO 639-1). Sin guardar, el del sistema. */
   dictationLanguage: string;
+  /** Quién transcribe: whisper en el equipo o, con clave propia, Groq o Gemini. */
+  transcriptionEngine: TranscriptionEngineId;
   /** Quién formatea: Ollama en el equipo o, con clave propia, Groq o Gemini. */
   formattingProvider: FormattingProvider;
   /** Borde de la pantalla donde se ancla la barra. */
@@ -51,6 +54,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   enableSounds: true,
   smartFormatting: true,
   dictationLanguage: 'en',
+  transcriptionEngine: 'local',
   formattingProvider: 'ollama',
   barEdge: 'bottom',
   showBar: true,
@@ -68,6 +72,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
 /** Validación más estricta que el tipo, para las que tienen valores cerrados. */
 const VALIDATORS: { [K in keyof Preferences]?: (value: unknown) => boolean } = {
   dictationLanguage: isDictationLanguage,
+  transcriptionEngine: isTranscriptionEngine,
   formattingProvider: isFormattingProvider,
   barEdge: isBarEdge,
   barHiddenUntil: (v) => Number.isFinite(v) && (v as number) >= 0,

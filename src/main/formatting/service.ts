@@ -1,9 +1,9 @@
 import { FORMATTING_MODELS, type FormattingProvider, type FormattingState } from '../../shared/formatting';
+import type { ReadApiKey } from '../keys';
 import { logger } from '../log';
 import type { Store } from '../store';
 import { GeminiFormatter, GroqFormatter } from './cloud';
 import { FormatError, type FormatRequest, type FormatResult, type Formatter } from './formatter';
-import { readKey } from './keys';
 import { OLLAMA_URL, OllamaFormatter } from './ollama';
 
 // El formateo visto desde el dictado: elige el proveedor según las
@@ -31,9 +31,17 @@ export type FormattingOutcome =
 export class TextFormatting {
   private formatter: Formatter | null = null;
 
-  constructor(private readonly store: Store) {
+  constructor(
+    private readonly store: Store,
+    private readonly readKey: ReadApiKey,
+  ) {
     let prefs = store.get().prefs;
+    let keys = store.get().apiKeys;
     store.subscribe((s) => {
+      if (s.apiKeys !== keys) {
+        keys = s.apiKeys;
+        if (s.prefs.formattingProvider !== 'ollama') void this.check();
+      }
       if (s.prefs === prefs) return;
       const changed =
         s.prefs.formattingProvider !== prefs.formattingProvider || s.prefs.smartFormatting !== prefs.smartFormatting;
@@ -51,7 +59,7 @@ export class TextFormatting {
 
   private current(): Formatter {
     const provider = this.store.get().prefs.formattingProvider;
-    if (this.formatter?.provider !== provider) this.formatter = create(provider);
+    if (this.formatter?.provider !== provider) this.formatter = create(provider, this.readKey);
     return this.formatter;
   }
 
@@ -103,8 +111,11 @@ export class TextFormatting {
     };
     if (!this.enabled) return set('off', null);
     if (provider !== 'ollama') {
-      const key = provider === 'groq' ? 'GROQ_API_KEY' : 'GEMINI_API_KEY';
-      return readKey(key) ? set('ready', null) : set('no_key', `Add ${key} to ~/.config/speech/keys.env`);
+      // Solo el estado: comprobar el proveedor no descifra la clave ni abre la red.
+      const key = this.store.get().apiKeys[provider];
+      if (key === 'saved') return set('ready', null);
+      if (key === 'locked') return set('no_key', 'macOS needs your permission to read your key. Allow it in Settings › Engines and Keys.');
+      return set('no_key', 'Add your key in Settings › Engines and Keys.');
     }
     // Al volver a comprobar el mismo proveedor no se pasa por «Checking…»:
     // la ventana parpadearía cada vez que recibe el foco.
@@ -125,14 +136,14 @@ export class TextFormatting {
   }
 }
 
-function create(provider: FormattingProvider): Formatter {
+function create(provider: FormattingProvider, readKey: ReadApiKey): Formatter {
   const model = FORMATTING_MODELS[provider];
   switch (provider) {
     case 'ollama':
       return new OllamaFormatter({ model, keepAlive: OLLAMA_KEEP_ALIVE });
     case 'groq':
-      return new GroqFormatter(model);
+      return new GroqFormatter(model, readKey);
     case 'gemini':
-      return new GeminiFormatter(model);
+      return new GeminiFormatter(model, readKey);
   }
 }

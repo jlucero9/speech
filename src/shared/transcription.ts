@@ -1,6 +1,8 @@
 // Datos de la transcripción que comparten main y la interfaz: modelos locales
 // e idiomas. El historial está en history.ts.
 
+import type { TranscriptionEngineId } from './engines';
+
 /**
  * Modelos de whisper.cpp que la app sabe descargar. Solo uno: los más pequeños
  * se equivocan demasiado en español para compensar lo que ahorran.
@@ -125,8 +127,8 @@ export interface TranscriberState {
 }
 
 export interface TranscriptionState {
-  /** Motor activo. De momento solo el local. */
-  engine: 'local';
+  /** Motor activo. */
+  engine: TranscriptionEngineId;
   model: ModelState;
   transcriber: TranscriberState;
 }

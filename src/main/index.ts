@@ -8,6 +8,7 @@ import { HUB_EVENTS, IPC, type HubPage } from '../shared/ipc';
 import { shownText, type HistoryActionResult } from '../shared/history';
 import type { DictionaryImportChoice, DictionaryInput, DictionaryResult } from '../shared/dictionary';
 import type { BarSound, NoticeAction } from '../shared/bar';
+import { isCloudProvider, type CloudProvider } from '../shared/engines';
 import { isValidPreference, type Preferences } from '../shared/preferences';
 import { accelerator, compactLabel, firstBinding, type ShortcutBinding } from '../shared/shortcuts';
 import { DEFAULT_LOCAL_MODEL, type ModelState } from '../shared/transcription';
@@ -25,6 +26,7 @@ import { scheduleDaily } from './daily';
 import { History } from './history';
 import { hubWindow, openHub, sendToHub } from './hub-window';
 import { appPids, KeyboardStatus } from './keyboard-status';
+import { ApiKeys } from './keys';
 import { logger } from './log';
 import { helperExecutable, transcriberExecutable } from './paths';
 import { Permissions } from './permissions';
@@ -32,6 +34,7 @@ import { defaultPreferences, loadPreferences, savePreferences } from './preferen
 import { RecorderWindow } from './recorder-window';
 import { initialState, Store } from './store';
 import { TextFormatting } from './formatting/service';
+import { TranscriptionEngines } from './transcription/engines';
 import { LocalWhisper } from './transcription/local-whisper';
 import { ModelManager } from './transcription/models';
 import { createTray, setTrayStatus, setTrayWarning } from './tray';
@@ -151,7 +154,10 @@ function main(): void {
 
   // Transcripción: el modelo se descarga la primera vez; desde entonces, sin red.
   const models = new ModelManager(store, join(dataDir, 'models'), DEFAULT_LOCAL_MODEL);
-  const engine = new LocalWhisper(store, models, transcriberExecutable());
+  // Las claves de la nube: al arrancar solo se mira si están, sin leerlas.
+  const apiKeys = new ApiKeys(store);
+  void apiKeys.refresh();
+  const engine = new TranscriptionEngines(store, new LocalWhisper(store, models, transcriberExecutable()), apiKeys.read);
   models.start();
   // El modelo se avisa en la bandeja mientras se descarga.
   store.subscribe((s) => setTrayStatus(modelTrayText(s.transcription.model)));
@@ -182,7 +188,7 @@ function main(): void {
   const voiceLevels = new VoiceLevels(join(dataDir, 'voice-levels.json'));
   const paster = new Paster(helper);
   // Formateo: Ollama en el equipo por defecto; si no responde, se pega la transcripción.
-  const formatting = new TextFormatting(store);
+  const formatting = new TextFormatting(store, apiKeys.read);
   void formatting.check();
 
   // Barra flotante: siempre viva; sus avisos y sonidos los decide main.
@@ -193,6 +199,7 @@ function main(): void {
       void keyboard.refresh();
       // Ollama se arranca y se para por fuera: que el Hub no enseñe un estado viejo.
       void formatting.check();
+      void apiKeys.refresh();
     });
   };
   const playSound = (sound: BarSound): void => {
@@ -210,8 +217,8 @@ function main(): void {
       case 'open_hub':
         showHub('settings/system');
         break;
-      case 'open_style':
-        showHub('style');
+      case 'open_engines':
+        showHub('settings/engines');
         break;
       case 'open_history':
         showHub('dictation');
@@ -390,6 +397,10 @@ function main(): void {
   });
   ipcMain.handle(IPC.setPreference, (_e, key: keyof Preferences, value: unknown) => {
     if (!isValidPreference(key, value)) throw new Error(`Invalid preference ${String(key)}`);
+    // Un motor en la nube solo se elige con su clave guardada.
+    if ((key === 'transcriptionEngine' || key === 'formattingProvider') && isCloudProvider(value) && store.get().apiKeys[value] !== 'saved') {
+      throw new Error(`No key for ${value}`);
+    }
     setPreference(key, value);
   });
   ipcMain.handle(IPC.requestAccessibility, () => permissions.requestAccessibility());
@@ -560,6 +571,24 @@ function main(): void {
     log.info('Settings reset to their defaults');
   });
 
+  // Motores y claves (Hub)
+  const toProvider = (v: unknown): CloudProvider => {
+    if (!isCloudProvider(v)) throw new Error('Unknown provider');
+    return v;
+  };
+  ipcMain.handle(IPC.saveApiKey, (_e, provider: unknown, key: unknown) => apiKeys.save(toProvider(provider), String(key ?? '')));
+  ipcMain.handle(IPC.removeApiKey, async (_e, provider: unknown) => {
+    const p = toProvider(provider);
+    const r = await apiKeys.remove(p);
+    if (r.ok) {
+      if (store.get().prefs.transcriptionEngine === p) setPreference('transcriptionEngine', 'local');
+      if (store.get().prefs.formattingProvider === p) setPreference('formattingProvider', 'ollama');
+    }
+    return r;
+  });
+  ipcMain.handle(IPC.allowApiKey, (_e, provider: unknown) => apiKeys.allow(toProvider(provider)));
+  ipcMain.handle(IPC.testApiKey, (_e, provider: unknown) => apiKeys.test(toProvider(provider)));
+
   app.on('before-quit', () => {
     log.info('Quitting');
     helper.stop();
@@ -589,6 +618,8 @@ function main(): void {
       dictionary,
       models,
       engine,
+      apiKeys,
+      formatting,
       showHub,
       dataDir,
     };

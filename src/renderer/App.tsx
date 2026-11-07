@@ -19,6 +19,7 @@ type Page = 'dictation' | 'dictionary' | 'style';
 function settingsSection(p: HubPage): SettingsSection | null {
   if (p === 'settings') return 'general';
   if (p === 'settings/system') return 'system';
+  if (p === 'settings/engines') return 'engines';
   if (p === 'settings/data') return 'data';
   return null;
 }
@@ -75,7 +76,7 @@ export function App() {
           </div>
         </nav>
         <main className="page-card">
-          {page === 'dictation' ? <DictationPage /> : page === 'dictionary' ? <DictionaryPage /> : <StylePage />}
+          {page === 'dictation' ? <DictationPage /> : page === 'dictionary' ? <DictionaryPage /> : <StylePage onOpenEngines={() => setSettings('engines')} />}
         </main>
       </div>
       {settings && (

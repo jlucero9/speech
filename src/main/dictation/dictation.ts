@@ -354,7 +354,8 @@ export class Dictation {
       return;
     }
     const model = this.store.get().transcription.model;
-    if (model.status !== 'ready') {
+    // Con un motor en la nube, el modelo local no hace falta.
+    if (this.store.get().prefs.transcriptionEngine === 'local' && model.status !== 'ready') {
       this.fail('model_not_ready', `The speech model is not ready (${model.status}).`, notice.modelNotReady(model));
       return;
     }

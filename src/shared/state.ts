@@ -2,6 +2,7 @@
 // una copia completa en cada cambio (es pequeño). Las ventanas no lo modifican
 // directamente: piden acciones por IPC (ver ipc.ts).
 
+import type { ApiKeysState } from './engines';
 import type { BarState } from './bar';
 import type { FormattingState } from './formatting';
 import type { FnUsage, HelperPasteResult } from './helper-protocol';
@@ -165,6 +166,8 @@ export interface SharedState {
   dictation: DictationState;
   transcription: TranscriptionState;
   formatting: FormattingState;
+  /** Qué claves hay en el llavero; las claves nunca llegan a las ventanas. */
+  apiKeys: ApiKeysState;
   bar: BarState;
   microphones: MicrophonesState;
   data: DataState;

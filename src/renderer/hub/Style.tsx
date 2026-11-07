@@ -1,10 +1,11 @@
-import { FORMATTING_PROVIDERS, type FormattingProvider } from '../../shared/formatting';
-import { Badge, Select } from '../settings/controls';
+import { FORMATTING_PROVIDER_LABELS } from '../../shared/formatting';
+import { Badge } from '../settings/controls';
 import { useSharedState } from '../useSharedState';
 
 // Página Style › Auto cleanup: cuánto se limpia cada dictado y quién lo hace.
 // None pega la transcripción tal cual; Light quita muletillas y arregla la
 // puntuación. Es un solo nivel para todas las apps y se aplica al elegirlo.
+// Quién limpia se elige en Ajustes › Engines and Keys; aquí solo se enseña.
 
 interface Level {
   id: 'none' | 'light';
@@ -30,13 +31,7 @@ const LEVELS: Level[] = [
   },
 ];
 
-const PROVIDER_LABELS: Record<FormattingProvider, string> = {
-  ollama: 'On this Mac (Ollama)',
-  groq: 'Groq (your key)',
-  gemini: 'Gemini (your key)',
-};
-
-export function StylePage() {
+export function StylePage({ onOpenEngines }: { onOpenEngines: () => void }) {
   const state = useSharedState();
   if (!state) return <div className="page style-page" />;
   const on = state.prefs.smartFormatting;
@@ -51,7 +46,6 @@ export function StylePage() {
       no_key: ['No key', 'warn'],
     } as const
   )[f.status];
-  const cloud = f.provider !== 'ollama' ? ' Your dictation, the app name and your dictionary words are sent to this service.' : '';
   const pending = f.status !== 'ready' && f.status !== 'checking' ? ' Until then, dictations are pasted without cleanup.' : '';
   return (
     <div className="page style-page">
@@ -98,19 +92,15 @@ export function StylePage() {
             <div className="setting-text">
               <div className="setting-label">Cleanup with</div>
               <div className="setting-description">
-                Model {f.model}.{cloud}
-                {f.detail ? ` ${f.detail}` : ''}
-                {pending}
+                {FORMATTING_PROVIDER_LABELS[f.provider]}.{f.detail ? ` ${f.detail}` : ''}
+                {pending}{' '}
+                <button type="button" className="inline-link" onClick={onOpenEngines}>
+                  Change in Engines and Keys
+                </button>
               </div>
             </div>
             <div className="setting-control setting-control-wide">
               <Badge tone={tone}>{badge}</Badge>
-              <Select
-                label="Cleanup with"
-                value={f.provider}
-                options={FORMATTING_PROVIDERS.map((p) => [p, PROVIDER_LABELS[p]])}
-                onChange={(v) => void window.speech.setPreference('formattingProvider', v)}
-              />
             </div>
           </div>
         </div>

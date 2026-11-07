@@ -12,7 +12,8 @@
 //   cargado: mediana de --reps formateos de cada caso con el modelo listo;
 // y, para Ollama, la memoria del modelo según el propio Ollama (`/api/ps`) y
 // la del proceso que lo ejecuta (phys_footprint, con `footprint`).
-// Las claves de la nube se leen como en la app (~/.config/speech/keys.env).
+// La app guarda las claves en el llavero, ligadas a su firma; aquí se pasan con
+// --key-groq y --key-gemini: la ruta de un fichero que solo contiene la clave.
 // --gap deja una pausa entre peticiones para no chocar con los límites por
 // minuto de los niveles gratuitos (no cuenta en la latencia).
 import { execFileSync } from 'node:child_process';
@@ -59,8 +60,9 @@ function makeFormatter(spec) {
   const [provider, ...rest] = spec.split(':');
   const model = rest.join(':');
   if (provider === 'ollama') return new mod.OllamaFormatter({ model, keepAlive: '10m' });
-  if (provider === 'groq') return new mod.GroqFormatter(model);
-  if (provider === 'gemini') return new mod.GeminiFormatter(model);
+  const readKey = async (p) => readFileSync(resolve(String(arg(`key-${p}`, ''))), 'utf8').trim();
+  if (provider === 'groq') return new mod.GroqFormatter(model, readKey);
+  if (provider === 'gemini') return new mod.GeminiFormatter(model, readKey);
   throw new Error(`Proveedor desconocido: ${provider}`);
 }
 

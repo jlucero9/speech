@@ -784,3 +784,26 @@
   flex-wrap: nowrap;
   max-width: none;
 }
+
+/* Engines and Keys */
+.key-form {
+  display: flex;
+  gap: 8px;
+  padding: 0 16px 14px;
+}
+
+.key-input {
+  flex: 1;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid rgba(0, 0, 0, 0.16);
+  border-radius: 8px;
+  background: #fff;
+  font: inherit;
+  font-size: 13px;
+}
+
+.key-input:focus {
+  outline: none;
+  border-color: rgba(0, 0, 0, 0.55);
+}
