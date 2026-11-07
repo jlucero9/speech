@@ -1,7 +1,11 @@
-// Genera el icono de la barra de menús: cinco barras redondeadas en forma de
-// onda, en negro con transparencia (imagen de plantilla de macOS).
-// Uso: npm run iconos → resources/trayTemplate.png y trayTemplate@2x.png
-import { writeFileSync } from 'node:fs';
+// Genera los iconos: el de la barra de menús (cinco barras redondeadas en
+// forma de onda, en negro con transparencia, imagen de plantilla de macOS) y
+// el de la app (las mismas barras en claro sobre un cuadrado redondeado
+// oscuro, con la rejilla de los iconos de macOS).
+// Uso: npm run iconos → resources/trayTemplate.png, trayTemplate@2x.png y speech.icns
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { crc32, deflateSync } from 'node:zlib';
 
@@ -78,7 +82,63 @@ function png(width, height, rgba) {
   ]);
 }
 
+// Icono de la app, en una rejilla de 1024: cuadrado redondeado de 824 con
+// margen de 100 (la de macOS), fondo con un leve degradado y las barras del
+// icono de la barra de menús, escaladas y centradas.
+const APP = { inset: 100, size: 824, radius: 185 };
+const BAR_SCALE = 30; // puntos de la rejilla de 18 → píxeles de 1024
+const TOP = [0x2b, 0x2b, 0x29];
+const BOTTOM = [0x14, 0x14, 0x13];
+const BARS_RGB = [0xfc, 0xfc, 0xfb];
+
+function roundedSquare(x, y) {
+  const c = APP.inset + APP.size / 2;
+  const half = APP.size / 2 - APP.radius;
+  const dx = Math.max(Math.abs(x - c) - half, 0);
+  const dy = Math.max(Math.abs(y - c) - half, 0);
+  return Math.hypot(dx, dy) - APP.radius;
+}
+
+function appIcon(n) {
+  const k = 1024 / n;
+  const rgba = Buffer.alloc(n * n * 4);
+  const SS = 4;
+  for (let y = 0; y < n; y++) {
+    for (let x = 0; x < n; x++) {
+      let bg = 0;
+      let fg = 0;
+      for (let sy = 0; sy < SS; sy++) {
+        for (let sx = 0; sx < SS; sx++) {
+          const px = (x + (sx + 0.5) / SS) * k;
+          const py = (y + (sy + 0.5) / SS) * k;
+          if (roundedSquare(px, py) > 0) continue;
+          bg++;
+          // A la rejilla del icono de la barra (18 pt), centrada.
+          if (coverage(SIZE_PT / 2 + (px - 512) / BAR_SCALE, SIZE_PT / 2 + (py - 512) / BAR_SCALE) <= 0) fg++;
+        }
+      }
+      const i = (y * n + x) * 4;
+      const t = y / n;
+      const a = fg / bg || 0;
+      for (let ch = 0; ch < 3; ch++) {
+        const back = TOP[ch] + (BOTTOM[ch] - TOP[ch]) * t;
+        rgba[i + ch] = Math.round(back + (BARS_RGB[ch] - back) * a);
+      }
+      rgba[i + 3] = Math.round((255 * bg) / (SS * SS));
+    }
+  }
+  return png(n, n, rgba);
+}
+
 const dir = join(import.meta.dirname, '..', 'resources');
 writeFileSync(join(dir, 'trayTemplate.png'), render(1));
 writeFileSync(join(dir, 'trayTemplate@2x.png'), render(2));
-console.log('resources/trayTemplate.png, resources/trayTemplate@2x.png');
+const iconset = join(mkdtempSync(join(tmpdir(), 'speech-icon-')), 'speech.iconset');
+execFileSync('mkdir', ['-p', iconset]);
+for (const pt of [16, 32, 128, 256, 512]) {
+  writeFileSync(join(iconset, `icon_${pt}x${pt}.png`), appIcon(pt));
+  writeFileSync(join(iconset, `icon_${pt}x${pt}@2x.png`), appIcon(pt * 2));
+}
+execFileSync('iconutil', ['-c', 'icns', iconset, '-o', join(dir, 'speech.icns')]);
+rmSync(join(iconset, '..'), { recursive: true, force: true });
+console.log('resources/trayTemplate.png, resources/trayTemplate@2x.png, resources/speech.icns');

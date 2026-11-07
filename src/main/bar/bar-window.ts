@@ -1,4 +1,4 @@
-import { BrowserWindow, ipcMain, Menu, screen, type Display, type IpcMainEvent, type MenuItemConstructorOptions } from 'electron';
+import { BrowserWindow, ipcMain, screen, type Display, type IpcMainEvent } from 'electron';
 import { join } from 'node:path';
 import type { BarEdge, BarSound } from '../../shared/bar';
 import { BAR_IPC, type BarCommand, type BarDrag } from '../../shared/ipc';
@@ -13,6 +13,11 @@ import { logger } from '../log';
 // página); la página pide recibir clics mientras el cursor está sobre una
 // zona activa. No decide nada: pinta el estado que le llega de main y le
 // devuelve los clics.
+//
+// El menú contextual se pinta en esta misma ventana (sin otra ventana viva).
+// Mientras está abierto, la ventana ocupa toda el área útil y recibe todos los
+// clics, así que uno fuera del menú lo cierra; la píldora no se mueve porque
+// está anclada al centro del borde.
 
 const log = logger('bar');
 
@@ -46,7 +51,8 @@ export interface BarHandlers {
   command(c: BarCommand): void;
   /** La barra se soltó tras arrastrarla: el borde más cercano al cursor. */
   dropped(edge: BarEdge): void;
-  menu(): MenuItemConstructorOptions[];
+  /** ¿Se puede abrir el menú ahora? (no durante un dictado) */
+  canOpenMenu(): boolean;
 }
 
 export class BarWindow {
@@ -56,6 +62,7 @@ export class BarWindow {
   /** Desde la esquina de la ventana hasta el cursor, al empezar a arrastrar. */
   private grab: { dx: number; dy: number } | null = null;
   private interactive = false;
+  private menuOpen = false;
   private stopped = false;
 
   constructor(
@@ -68,7 +75,8 @@ export class BarWindow {
     });
     ipcMain.on(BAR_IPC.command, (e, c: BarCommand) => {
       if (!this.fromBar(e)) return;
-      if (c.type === 'menu') this.popupMenu();
+      if (c.type === 'menu') this.openMenu();
+      else if (c.type === 'menu-closed') this.closeMenu('closed');
       else this.handlers.command(c);
     });
     ipcMain.on(BAR_IPC.drag, (e, d: BarDrag) => {
@@ -119,6 +127,8 @@ export class BarWindow {
       },
     });
     this.win = win;
+    this.menuOpen = false;
+    this.mouseApplied = null;
     preventActivation(win);
     // Por encima de las apps a pantalla completa y del Dock.
     win.setAlwaysOnTop(true, 'screen-saver');
@@ -170,6 +180,29 @@ export class BarWindow {
     return this.edge === 'bottom' ? BOTTOM_SIZE : SIDE_SIZE;
   }
 
+  get isMenuOpen(): boolean {
+    return this.menuOpen;
+  }
+
+  private openMenu(): void {
+    const win = this.win;
+    if (!win || win.isDestroyed() || this.menuOpen || this.grab || !this.handlers.canOpenMenu()) return;
+    this.menuOpen = true;
+    this.place(this.currentDisplay());
+    this.applyMouse();
+    win.webContents.send(BAR_IPC.menu, true);
+  }
+
+  /** También desde main: un dictado que empieza cierra el menú. */
+  closeMenu(why: string): void {
+    if (!this.menuOpen) return;
+    this.menuOpen = false;
+    log.info(`Bar menu closed (${why})`);
+    this.contents?.send(BAR_IPC.menu, false);
+    this.place(this.currentDisplay());
+    this.applyMouse();
+  }
+
   private currentDisplay(): Display {
     const all = screen.getAllDisplays();
     return all.find((d) => d.id === this.display?.id) ?? screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
@@ -181,6 +214,10 @@ export class BarWindow {
     const win = this.win;
     if (!win || win.isDestroyed() || this.grab) return;
     const wa = display.workArea;
+    if (this.menuOpen) {
+      win.setBounds(wa);
+      return;
+    }
     const { width, height } = this.size();
     const x =
       this.edge === 'bottom'
@@ -193,17 +230,20 @@ export class BarWindow {
   }
 
   private setInteractive(on: boolean): void {
-    if (on === this.interactive || !this.win || this.win.isDestroyed()) return;
     this.interactive = on;
+    this.applyMouse();
+  }
+
+  private mouseApplied: boolean | null = null;
+
+  /** Con el menú abierto, la ventana recibe todos los clics. */
+  private applyMouse(): void {
+    const on = this.interactive || this.menuOpen;
+    if (on === this.mouseApplied || !this.win || this.win.isDestroyed()) return;
+    this.mouseApplied = on;
     // Sin clics, la página sigue recibiendo el movimiento del ratón para saber
     // cuándo vuelve a estar sobre una zona activa.
     this.win.setIgnoreMouseEvents(!on, { forward: true });
-  }
-
-  private popupMenu(): void {
-    const win = this.win;
-    if (!win || win.isDestroyed()) return;
-    Menu.buildFromTemplate(this.handlers.menu()).popup({ window: win });
   }
 
   /** Arrastre: la ventana sigue al cursor y, al soltar, se ancla al borde más cercano. */

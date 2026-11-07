@@ -24,6 +24,7 @@
     "start": "node scripts/dev.mjs",
     "start:debug": "node scripts/dev.mjs --debug",
     "build": "node scripts/build.mjs",
+    "empaquetar": "scripts/empaquetar.sh",
     "helper": "scripts/helper.sh",
     "transcriber": "scripts/transcriber.sh",
     "typecheck": "tsc -p .",

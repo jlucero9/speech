@@ -12,6 +12,10 @@ const log = logger('keys');
 const ERR_NOT_FOUND = -25300;
 const ERR_INTERACTION_NOT_ALLOWED = -25308;
 const ERR_AUTH_FAILED = -25293;
+/** Borrar un ítem que creó otro binario (Speech antes de actualizarse). */
+const ERR_INVALID_OWNER_EDIT = -25244;
+/** Del módulo: hay un aviso del llavero abierto y no se ha tocado el llavero. */
+const KEYCHAIN_BUSY = -1;
 
 interface KeychainModule {
   status(account: string): Promise<{ status: number }>;
@@ -39,8 +43,12 @@ function loadModule(): KeychainModule | null {
   }
 }
 
+/**
+ * macOS liga cada clave al binario exacto que la guardó: tras actualizar
+ * Speech (o Electron), leerla, cambiarla o borrarla pide permiso una vez.
+ */
 function needsPermission(status: number): boolean {
-  return status === ERR_INTERACTION_NOT_ALLOWED || status === ERR_AUTH_FAILED;
+  return status === ERR_INTERACTION_NOT_ALLOWED || status === ERR_AUTH_FAILED || status === ERR_INVALID_OWNER_EDIT;
 }
 
 export class ApiKeys {
@@ -59,6 +67,7 @@ export class ApiKeys {
       CLOUD_PROVIDERS.map(async (p) => {
         if (!this.keychain) return this.set(p, 'unavailable');
         const { status } = await this.keychain.status(p);
+        if (status === KEYCHAIN_BUSY) return;
         if (status === ERR_NOT_FOUND) this.set(p, 'missing');
         else if (status !== 0 && !needsPermission(status)) {
           log.warn(`Keychain status for ${p}: ${status}`);
@@ -73,6 +82,7 @@ export class ApiKeys {
     const name = CLOUD_PROVIDER_NAMES[provider];
     if (!this.keychain) throw new ApiKeyError('The macOS Keychain is not available.');
     const r = await this.keychain.get(provider, false);
+    if (r.status === KEYCHAIN_BUSY) throw new ApiKeyError('A Keychain permission prompt is open. Answer it and try again.');
     if (r.status === 0 && r.value) {
       this.set(provider, 'saved');
       return r.value;
@@ -94,8 +104,10 @@ export class ApiKeys {
     if (!isPlausibleApiKey(value)) return { ok: false, message: "That doesn't look like an API key." };
     if (!this.keychain) return { ok: false, message: 'The macOS Keychain is not available.' };
     const { status } = await this.keychain.set(provider, value);
+    if (status === KEYCHAIN_BUSY) return { ok: false, message: 'A Keychain permission prompt is open. Answer it and try again.' };
     if (status !== 0) {
       log.warn(`Keychain save for ${provider}: ${status}`);
+      if (needsPermission(status)) this.set(provider, 'locked');
       return {
         ok: false,
         message: needsPermission(status)
@@ -111,8 +123,10 @@ export class ApiKeys {
   async remove(provider: CloudProvider): Promise<ApiKeyResult> {
     if (!this.keychain) return { ok: false, message: 'The macOS Keychain is not available.' };
     const { status } = await this.keychain.remove(provider);
+    if (status === KEYCHAIN_BUSY) return { ok: false, message: 'A Keychain permission prompt is open. Answer it and try again.' };
     if (status !== 0 && status !== ERR_NOT_FOUND) {
       log.warn(`Keychain delete for ${provider}: ${status}`);
+      if (needsPermission(status)) this.set(provider, 'locked');
       return {
         ok: false,
         message: needsPermission(status)

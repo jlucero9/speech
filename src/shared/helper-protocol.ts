@@ -27,7 +27,7 @@
 
 import type { ShortcutBinding } from './shortcuts';
 
-export const HELPER_PROTOCOL_VERSION = 5;
+export const HELPER_PROTOCOL_VERSION = 6;
 
 /** Tope de una línea; algo más largo es un fallo del otro lado. */
 export const HELPER_MAX_LINE_BYTES = 1024 * 1024;
@@ -38,7 +38,14 @@ export interface HelperRequests {
     payload: Record<string, never>;
     response: {
       type: 'ACK';
-      payload: { pid: number; protocolVersion: number; launchMs: number; disclaimed: boolean; tap: HelperTapState };
+      payload: {
+        pid: number;
+        protocolVersion: number;
+        launchMs: number;
+        disclaimed: boolean;
+        tap: HelperTapState;
+        memoryPressure: MemoryPressureLevel;
+      };
     };
   };
   GetAccessibilityStatus: {
@@ -149,6 +156,9 @@ export interface PasteOutcomePayload {
 
 export type HelperTapState = 'active' | 'no-permission' | 'failed' | 'stopped';
 
+/** Presión de memoria del sistema, según el kernel. */
+export type MemoryPressureLevel = 'normal' | 'warning' | 'critical';
+
 export interface SecureInputPayload {
   blocked: boolean;
   pid?: number;
@@ -180,6 +190,7 @@ export interface HelperEvents {
   TapStatus: { state: HelperTapState; reason: string; listenAccess: boolean };
   SecureInputStatus: SecureInputPayload;
   PasteOutcome: PasteOutcomePayload;
+  MemoryPressure: { level: MemoryPressureLevel };
 }
 
 export type HelperRequestMessage = {

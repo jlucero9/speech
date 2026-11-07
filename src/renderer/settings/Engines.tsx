@@ -10,6 +10,12 @@ import { Badge, Section, Select, SettingRow } from './controls';
 // llavero de macOS) y, siempre a la vista, qué sale del equipo con cada opción.
 // Un motor en la nube no se puede elegir sin su clave.
 
+/** Lo que se vio al comparar los dos al transcribir. */
+const TRANSCRIPTION_NOTES: Record<CloudProvider, string> = {
+  groq: 'It wrote what was said most faithfully in testing.',
+  gemini: "Gemini can skip parts of what you say or add words you didn't say. Groq was more faithful in testing.",
+};
+
 const TERMS: Record<CloudProvider, string> = {
   groq: 'Groq says it does not train on what you send and may keep it for up to 30 days to investigate problems.',
   gemini: 'On the free tier, Google may use what you send to improve its products and people may review it. On a paid plan it does not, and keeps it only for a limited time to detect abuse.',
@@ -27,7 +33,11 @@ export function EnginesPage({ state, onOpenStyle }: { state: SharedState; onOpen
       <Section title="Who does the work">
         <SettingRow
           label="Transcribe with"
-          description={engine === 'local' ? `${LOCAL_MODELS[state.transcription.model.id].label} (whisper). Nothing leaves this Mac.` : `${TRANSCRIPTION_MODELS[engine]}. The audio of each dictation is sent to ${CLOUD_PROVIDER_NAMES[engine]}.`}
+          description={
+            engine === 'local'
+              ? `${LOCAL_MODELS[state.transcription.model.id].label} (whisper). Nothing leaves this Mac.`
+              : `${TRANSCRIPTION_MODELS[engine]}. The audio of each dictation is sent to ${CLOUD_PROVIDER_NAMES[engine]}. ${TRANSCRIPTION_NOTES[engine]}`
+          }
         >
           <Select<TranscriptionEngineId>
             label="Transcribe with"
@@ -39,6 +49,9 @@ export function EnginesPage({ state, onOpenStyle }: { state: SharedState; onOpen
             onChange={(v) => void window.speech.setPreference('transcriptionEngine', v)}
           />
         </SettingRow>
+        <Disclosure label="Groq or Gemini for transcription">
+          In testing, Groq wrote down what was said. Gemini sometimes skipped parts of long dictations or added words nobody said, so Groq is the better choice if you transcribe in the cloud.
+        </Disclosure>
         <SettingRow
           label="Clean up with"
           description={
@@ -121,7 +134,7 @@ function KeyRow({ provider, state }: { provider: CloudProvider; state: SharedSta
       setEditing(false);
     }
   };
-  const description = error ?? (status === 'saved' ? 'Saved in your macOS Keychain.' : status === 'locked' ? 'macOS needs your permission to read this key.' : status === 'unavailable' ? 'The macOS Keychain is not available.' : 'Not added. Stored only in your macOS Keychain.');
+  const description = error ?? (status === 'saved' ? 'Saved in your macOS Keychain.' : status === 'locked' ? 'macOS asks again after Speech is updated. Use Allow and choose Always Allow.' : status === 'unavailable' ? 'The macOS Keychain is not available.' : 'Not added. Stored only in your macOS Keychain.');
   return (
     <>
       <SettingRow label={name} description={description} wide>

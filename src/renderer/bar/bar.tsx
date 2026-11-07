@@ -1,9 +1,23 @@
 import { StrictMode, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { BarEdge, Notice } from '../../shared/bar';
-import type { BarApi } from '../../shared/ipc';
+import type { BarApi, BarMenuItem } from '../../shared/ipc';
+import { builtInMicrophone, microphoneChoices, microphoneInUse } from '../../shared/microphones';
 import type { SharedState } from '../../shared/state';
-import { AlertIcon, CheckIcon, CloseIcon, ErrorIcon, InfoIcon, MicIcon } from './icons';
+import {
+  AlertIcon,
+  CheckIcon,
+  ChevronRightIcon,
+  ClockIcon,
+  CloseIcon,
+  ErrorIcon,
+  GearIcon,
+  HistoryIcon,
+  InfoIcon,
+  MicIcon,
+  MicOutlineIcon,
+  PasteIcon,
+} from './icons';
 import { playSound } from './sounds';
 import './bar.css';
 import { compactLabel, firstBinding, type ShortcutBinding } from '../../shared/shortcuts';
@@ -86,8 +100,14 @@ function useHotTracking(): { hot: boolean; overPill: boolean } {
 function App() {
   const state = useSharedState();
   const { hot, overPill: pillHover } = useHotTracking();
+  const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => api.onSound((s) => playSound(s, s === 'start' || s === 'stop' || s === 'lock' ? 1 : 0.5)), []);
+  useEffect(() => api.onMenu(setMenuOpen), []);
+  const closeMenu = useCallback(() => {
+    setMenuOpen(false);
+    api.command({ type: 'menu-closed' });
+  }, []);
 
   if (!state) return null;
   const d = state.dictation;
@@ -124,7 +144,109 @@ function App() {
           />
         </div>
       </div>
+      {menuOpen && <ContextMenu state={state} onClose={closeMenu} />}
     </div>
+  );
+}
+
+/**
+ * Menú del clic secundario. Ocupa toda la ventana (que mientras tanto cubre el
+ * área útil): un clic fuera de las entradas, o sacar el cursor de la pantalla,
+ * lo cierra. Tema claro, como los menús del Hub, aunque la barra sea oscura.
+ */
+function ContextMenu({ state, onClose }: { state: SharedState; onClose: () => void }) {
+  const edge = state.prefs.barEdge;
+  const [micOpen, setMicOpen] = useState(false);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const keepMic = (open: boolean): void => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    closeTimer.current = null;
+    if (open) setMicOpen(true);
+    // Un respiro al cruzar en diagonal hacia el submenú.
+    else closeTimer.current = setTimeout(() => setMicOpen(false), 250);
+  };
+  useEffect(() => {
+    const leave = (): void => onClose();
+    document.documentElement.addEventListener('mouseleave', leave);
+    return () => document.documentElement.removeEventListener('mouseleave', leave);
+  }, [onClose]);
+  const choose = (item: BarMenuItem): void => api.command({ type: 'menu-item', item });
+  const { choices, selectedKey } = microphoneChoices(state.prefs, state.microphones);
+  const inUse = microphoneInUse(state.prefs, state.microphones);
+  const mac = builtInMicrophone(state.microphones.devices);
+  return (
+    <div
+      className="menu-layer"
+      data-hot=""
+      onPointerDown={(e) => e.target === e.currentTarget && onClose()}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="menu" data-edge={edge} role="menu">
+        <MenuItem icon={<ClockIcon size={16} strokeWidth={1.8} />} label="Hide for 1 hour" onClick={() => choose('hide')} />
+        <MenuItem icon={<GearIcon size={16} strokeWidth={1.8} />} label="Settings" onClick={() => choose('settings')} />
+        <div className="menu-separator" />
+        <div className="menu-sub-anchor" onMouseEnter={() => keepMic(true)} onMouseLeave={() => keepMic(false)}>
+          <MenuItem
+            icon={<MicOutlineIcon size={16} strokeWidth={1.8} />}
+            label="Microphone"
+            trailing={<ChevronRightIcon size={14} strokeWidth={2} />}
+            active={micOpen}
+            onClick={() => setMicOpen(true)}
+          />
+          {micOpen && (
+            <div className="menu submenu" data-edge={edge} role="menu">
+              <div className="submenu-scroll">
+                {choices.map((c) => (
+                  <MenuItem
+                    key={c.key || 'auto'}
+                    icon={c.key === selectedKey ? <CheckIcon size={18} strokeWidth={1.8} /> : null}
+                    label={c.title}
+                    onClick={() => {
+                      api.command({ type: 'set-microphone', id: c.device?.id ?? '', label: c.device?.label ?? '' });
+                      onClose();
+                    }}
+                  />
+                ))}
+              </div>
+              <div className="menu-separator" />
+              <div className="menu-note">
+                Mic in use:
+                <br />
+                {inUse && inUse === mac?.label ? 'Built-in mic (recommended)' : (inUse ?? 'Unknown')}
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="menu-separator" />
+        <MenuItem icon={<HistoryIcon size={16} strokeWidth={1.8} />} label="Transcript history" onClick={() => choose('history')} />
+        <MenuItem icon={<PasteIcon size={16} strokeWidth={1.8} />} label="Paste last transcript" onClick={() => choose('paste_last')} />
+      </div>
+    </div>
+  );
+}
+
+function MenuItem({
+  icon,
+  label,
+  trailing,
+  active,
+  onClick,
+}: {
+  icon: ReactNode | null;
+  label: string;
+  trailing?: ReactNode;
+  active?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button type="button" className="menu-item" data-active={active || undefined} tabIndex={-1} role="menuitem" onClick={onClick}>
+      {icon && <span className="menu-icon">{icon}</span>}
+      <span className="menu-label">{label}</span>
+      {trailing && <span className="menu-trailing">{trailing}</span>}
+    </button>
   );
 }
 

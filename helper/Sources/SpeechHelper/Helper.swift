@@ -10,12 +10,12 @@ import ApplicationServices
 // Se cierra solo si:
 // - stdin llega a EOF (main cerró la tubería o murió);
 // - su proceso padre termina;
-// - pasan 15 s sin ningún mensaje de main;
+// - pasan 15 s despierto sin ningún mensaje de main;
 // - recibe SIGTERM o SIGINT.
 // Al salir, devuelve el sonido si lo había silenciado.
 
 final class Helper {
-    static let protocolVersion = 5
+    static let protocolVersion = 6
     /// La grabación de un atajo se apaga sola pasado este tiempo.
     private static let recordingTimeout: TimeInterval = 60
     private static let orphanTimeout: TimeInterval = 15
@@ -24,7 +24,10 @@ final class Helper {
 
     private let launchedAt: Date
     private var ipc: IPC!
-    private var lastMessageAt = Date()
+    /// En tiempo despierto (systemUptime no avanza con el equipo dormido): al
+    /// despertar de un reposo, aunque sea de mantenimiento, el silencio de main
+    /// mientras dormía no cuenta como que main haya muerto.
+    private var lastMessageAt = ProcessInfo.processInfo.systemUptime
     private var accessibilityTrusted = AXIsProcessTrusted()
     private var lastTapAttempt = Date.distantPast
     private var timers: [DispatchSourceTimer] = []
@@ -32,6 +35,7 @@ final class Helper {
     private var activity: NSObjectProtocol?
     private var signalSources: [DispatchSourceSignal] = []
     private var recordingTimer: DispatchWorkItem?
+    private var memoryPressure: DispatchSourceMemoryPressure?
     private let keyboard = Keyboard()
     private let secureInput = SecureInputMonitor()
     private let paster = Paster()
@@ -51,6 +55,8 @@ final class Helper {
             onRequest: { [weak self] request in self?.handle(request) },
             onClose: { Helper.quit("main closed the connection") }
         )
+        // Antes de atender a main: el sonido que dejó silenciado un helper anterior.
+        OutputMute.recoverFromMarker()
         ipc.startReading()
         watchSignals()
         setUpKeyboard()
@@ -58,6 +64,7 @@ final class Helper {
         startTimers()
         observeAccessibilityChanges()
         observeWake()
+        observeMemoryPressure()
         Log.info("Helper started: pid \(getpid()), responsibility disclaimed: \(Responsibility.isDisclaimed), accessibility: \(accessibilityTrusted)")
         if #available(macOS 15.4, *) {
             Log.info("Clipboard access: \(NSPasteboard.general.accessBehavior.rawValue) (0 default, 1 ask, 2 allow, 3 deny)")
@@ -67,7 +74,7 @@ final class Helper {
     // MARK: Mensajes
 
     private func handle(_ request: IncomingRequest) {
-        lastMessageAt = Date()
+        lastMessageAt = ProcessInfo.processInfo.systemUptime
         switch request.type {
         case "IsReady":
             ipc.respond(to: request.id, type: "ACK", payload: [
@@ -76,6 +83,7 @@ final class Helper {
                 "launchMs": Int(Date().timeIntervalSince(launchedAt) * 1000),
                 "disclaimed": Responsibility.isDisclaimed,
                 "tap": keyboard.state.rawValue,
+                "memoryPressure": Helper.memoryPressureLevel(),
             ])
         case "GetAccessibilityStatus":
             ipc.respond(to: request.id, type: "AccessibilityStatus", payload: ["trusted": checkAccessibility()])
@@ -209,6 +217,31 @@ final class Helper {
         ) { [weak self] _ in self?.keyboard.noteWake() }
     }
 
+    // MARK: Memoria
+
+    /// El sistema avisa cuando la memoria escasea; main suelta entonces los
+    /// modelos que no está usando. Sin sondeo: es un evento del kernel.
+    private func observeMemoryPressure() {
+        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.normal, .warning, .critical], queue: .main)
+        source.setEventHandler { [weak self] in
+            guard let self else { return }
+            let event = source.data
+            let level = event.contains(.critical) ? "critical" : event.contains(.warning) ? "warning" : "normal"
+            Log.info("Memory pressure: \(level)")
+            self.ipc.emit(event: "MemoryPressure", payload: ["level": level])
+        }
+        source.resume()
+        memoryPressure = source
+    }
+
+    /// Nivel actual, para el arranque (1 normal, 2 aviso, 4 crítico).
+    static func memoryPressureLevel() -> String {
+        var level: Int32 = 0
+        var size = MemoryLayout<Int32>.size
+        guard sysctlbyname("kern.memorystatus_vm_pressure_level", &level, &size, nil, 0) == 0 else { return "normal" }
+        return level >= 4 ? "critical" : level >= 2 ? "warning" : "normal"
+    }
+
     // MARK: Accesibilidad
 
     /// Lee el permiso y avisa a main si cambió.
@@ -263,7 +296,7 @@ final class Helper {
     private func startTimers() {
         addTimer(every: 1) { [weak self] in
             guard let self else { return }
-            if Date().timeIntervalSince(self.lastMessageAt) > Helper.orphanTimeout {
+            if ProcessInfo.processInfo.systemUptime - self.lastMessageAt > Helper.orphanTimeout {
                 Helper.quit("no message from main in \(Int(Helper.orphanTimeout)) s")
             }
         }

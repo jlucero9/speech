@@ -46,7 +46,8 @@ export type FormatErrorCode =
   | 'failed' // error del proveedor
   | 'network'
   | 'auth'
-  | 'quota';
+  | 'quota'
+  | 'low_memory'; // el equipo va justo de memoria: no se carga el modelo local
 
 export class FormatError extends Error {
   constructor(

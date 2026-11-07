@@ -1,21 +1,21 @@
 import { app, clipboard, dialog, ipcMain, powerMonitor, shell } from 'electron';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { copyFile, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { HUB_EVENTS, IPC, type HubPage } from '../shared/ipc';
+import { HUB_EVENTS, IPC, type BarMenuItem, type HubPage } from '../shared/ipc';
 import { shownText, type HistoryActionResult } from '../shared/history';
 import type { DictionaryImportChoice, DictionaryInput, DictionaryResult } from '../shared/dictionary';
 import type { BarSound, NoticeAction } from '../shared/bar';
 import { isCloudProvider, type CloudProvider } from '../shared/engines';
 import { isValidPreference, type Preferences } from '../shared/preferences';
-import { accelerator, compactLabel, firstBinding, type ShortcutBinding } from '../shared/shortcuts';
+import { compactLabel, firstBinding, type ShortcutBinding } from '../shared/shortcuts';
 import { DEFAULT_LOCAL_MODEL, type ModelState } from '../shared/transcription';
 import { BarWindow } from './bar/bar-window';
 import { notice, setNoticeShortcuts } from './bar/notice-texts';
 import { Notices } from './bar/notices';
-import { openDatabase } from './db';
+import { isDamage, openChecked, repairDatabase, watchForDamage, type RepairResult } from './db/repair';
 import { Dictation, type DictationWords } from './dictation/dictation';
 import { Dictionary } from './dictionary';
 import { Paster } from './dictation/paste';
@@ -81,11 +81,35 @@ function main(): void {
     log.info(`Preference ${key} = ${JSON.stringify(value)}`);
   };
 
-  // Base de datos
+  // Base de datos. Si está dañada (al arrancar, o porque en marcha SQLite lo
+  // dijo y quedó la marca), se repara antes de usarla.
   let db: DatabaseSync | null = null;
+  const dbPath = join(dataDir, 'speech.sqlite');
+  const repairMark = join(dataDir, 'repair-database');
+  let repaired: RepairResult | null = null;
+  // Se asigna al crear la barra; hasta entonces no hay dónde avisar.
+  let notifyDamage: () => void = () => {};
   try {
-    const opened = openDatabase(join(dataDir, 'speech.sqlite'));
-    db = opened.db;
+    let opened;
+    try {
+      if (existsSync(repairMark)) throw new Error('database disk image is malformed (marked while running)');
+      opened = openChecked(dbPath);
+    } catch (err) {
+      if (!isDamage(err)) throw err;
+      log.error(`The database is damaged: ${(err as Error).message}`);
+      repaired = repairDatabase(dbPath);
+      opened = repaired.opened;
+      rmSync(repairMark, { force: true });
+    }
+    db = watchForDamage(opened.db, (err) => {
+      log.error(`The database reported damage while running: ${err.message}`);
+      try {
+        writeFileSync(repairMark, `${new Date().toISOString()} ${err.message}\n`);
+      } catch (e) {
+        log.error('Could not mark the database for repair', e);
+      }
+      notifyDamage();
+    });
     store.update((s) => ({
       ...s,
       data: {
@@ -101,7 +125,7 @@ function main(): void {
   }
 
   // Helper y permisos
-  const helper = new HelperProcess(helperExecutable());
+  const helper = new HelperProcess(helperExecutable(), dataDir);
   helper.on('state', (h) => store.update((s) => ({ ...s, helper: h })));
   const permissions = new Permissions(store, helper);
   permissions.refreshMicrophone();
@@ -229,6 +253,11 @@ function main(): void {
       case 'show_bar':
         setPreference('barHiddenUntil', 0);
         break;
+      case 'restart_app':
+        log.info('Restarting to repair the database');
+        app.relaunch();
+        app.quit();
+        break;
     }
   };
   const bar = new BarWindow(store.get().prefs.barEdge, {
@@ -244,30 +273,54 @@ function main(): void {
           return runNoticeAction(c.id, c.action);
         case 'notice-closed':
           return notices.close(c.id, c.why);
+        case 'menu-item':
+          return runMenuItem(c.item);
+        case 'set-microphone': {
+          const id = typeof c.id === 'string' ? c.id : '';
+          const label = typeof c.label === 'string' ? c.label : '';
+          if (!isValidPreference('microphoneId', id) || !isValidPreference('microphoneLabel', label)) return;
+          setPreference('microphoneId', id);
+          setPreference('microphoneLabel', label);
+          return;
+        }
       }
     },
     dropped: (edge) => {
       if (edge !== store.get().prefs.barEdge) setPreference('barEdge', edge);
     },
-    menu: () => [
-      {
-        label: 'Hide for 1 hour',
-        click: () => {
-          setPreference('barHiddenUntil', Date.now() + HIDE_BAR_MS);
-          notices.show(notice.barHidden());
-        },
-      },
-      { label: 'Settings', click: () => showHub('settings') },
-      { type: 'separator' },
-      { label: 'Transcript history', click: () => showHub('dictation') },
-      {
-        label: 'Paste last transcript',
-        accelerator: accelerator(firstBinding(store.get().prefs.shortcuts, 'paste_last')),
-        click: () => dictation?.pasteLastFromMenu(),
-      },
-    ],
+    canOpenMenu: () => !dictation?.inProgress,
+  });
+  // El menú contextual de la barra (se pinta en la propia barra).
+  function runMenuItem(item: BarMenuItem): void {
+    bar.closeMenu(`chose ${item}`);
+    switch (item) {
+      case 'hide':
+        setPreference('barHiddenUntil', Date.now() + HIDE_BAR_MS);
+        notices.show(notice.barHidden());
+        break;
+      case 'settings':
+        showHub('settings');
+        break;
+      case 'history':
+        showHub('dictation');
+        break;
+      case 'paste_last':
+        dictation?.pasteLastFromMenu();
+        break;
+    }
+  }
+  // Un dictado que empieza cierra el menú.
+  store.subscribe((s) => {
+    if (s.dictation.status !== 'idle' && bar.isMenuOpen) bar.closeMenu('dictation started');
   });
   bar.create();
+  notifyDamage = () => notices.show(notice.databaseDamaged());
+  if (repaired) {
+    const n = (o: Record<string, number>) => Object.values(o).reduce((a, b) => a + b, 0);
+    const r = repaired;
+    // Cuando la barra ya pinta.
+    setTimeout(() => notices.show(notice.databaseRepaired(n(r.recovered), n(r.lost))), 1_500);
+  }
   // Al cambiar el borde, la ventana cambia de forma; al ocultarla una hora, vuelve sola.
   let hideTimer: NodeJS.Timeout | null = null;
   const syncBarPrefs = (p: Preferences): void => {
@@ -376,11 +429,44 @@ function main(): void {
   });
 
   helper.start();
-  powerMonitor.on('resume', () => helper.noteResume());
-  // Dormido no se dicta: el modelo no tiene por qué seguir ocupando memoria.
+  /** Cuando no haya ningún dictado en marcha (ya, si no lo hay). */
+  const whenDictationIdle = (fn: () => void): void => {
+    if (!dictation?.inProgress) return fn();
+    const off = store.subscribe((s) => {
+      if (s.dictation.status !== 'idle') return;
+      off();
+      fn();
+    });
+  };
+  powerMonitor.on('resume', () => {
+    log.info('System resumed');
+    helper.noteResume();
+    // Ollama pudo cerrarse o reiniciarse mientras dormía.
+    void formatting.check();
+  });
+  // Dormido no se dicta: los modelos no tienen por qué seguir ocupando memoria.
+  // Una grabación en marcha se para y se guarda; lo que se esté transcribiendo
+  // termina al despertar, y entonces se sueltan.
   powerMonitor.on('suspend', () => {
-    engine.release('system sleep');
-    formatting.release('system sleep');
+    log.info('System going to sleep');
+    dictation?.systemWillSleep();
+    engine.release('system sleep', true);
+    whenDictationIdle(() => formatting.release('system sleep'));
+  });
+  // Poca memoria libre. En «warning» (frecuente en un equipo de 8 GB con
+  // varias apps abiertas) se suelta el modelo de formateo de Ollama, el mayor
+  // y el único opcional, en cuanto no se use. En «critical» también whisper
+  // (~0,7 GB), y el formateo local se salta hasta que pase. El siguiente
+  // dictado vuelve a cargar lo que haga falta.
+  let memoryPressure = 'normal';
+  helper.on('memoryPressure', (level) => {
+    if (level === memoryPressure) return;
+    log.info(`Memory pressure ${memoryPressure} → ${level}`);
+    memoryPressure = level;
+    formatting.setLowMemory(level === 'critical');
+    if (level === 'normal') return;
+    whenDictationIdle(() => formatting.release(`memory pressure ${level}`));
+    if (level === 'critical') engine.release(`memory pressure ${level}`, true);
   });
 
   createTray(() => showHub());

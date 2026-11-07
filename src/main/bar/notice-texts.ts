@@ -13,6 +13,8 @@ export function setNoticeShortcuts(ptt: string, pasteLast: string | null): void 
   keys.pasteLast = pasteLast;
 }
 
+const n = (v: number): string => v.toLocaleString('en-US');
+
 export const notice = {
   pasteFailed(dictationId: string | null): NewNotice {
     return {
@@ -55,6 +57,9 @@ export const notice = {
         break;
       case 'raw_quota':
         body = "You've reached the formatting service's usage limit.";
+        break;
+      case 'raw_low_memory':
+        body = 'Your Mac is low on memory, so cleanup was skipped. It comes back on its own when memory frees up.';
         break;
       default:
         body = 'The formatter returned an error.';
@@ -198,6 +203,31 @@ export const notice = {
     };
   },
 
+  microphoneLost(): NewNotice {
+    return {
+      kind: 'microphone_lost',
+      status: 'alert',
+      title: 'Your microphone was disconnected',
+      body: 'What you said until then is being transcribed.',
+      timeoutMs: 6_000,
+    };
+  },
+
+  sleepStopped(dictationId: string): NewNotice {
+    return {
+      kind: 'sleep_stopped',
+      status: 'alert',
+      title: 'Your Mac went to sleep while you were dictating',
+      body: 'Your recording is saved. Recover it to transcribe and paste it.',
+      actions: [
+        { action: 'undo_cancel', label: 'Recover' },
+        { action: 'open_history', label: 'Open History' },
+      ],
+      timeoutMs: 12_000,
+      dictationId,
+    };
+  },
+
   durationWarning(): NewNotice {
     return { kind: 'duration_warning', status: 'info', title: 'Dictation will stop after one more minute', timeoutMs: 6_000 };
   },
@@ -209,6 +239,31 @@ export const notice = {
       title: 'Dictation stopped after 20 minutes',
       body: 'What you said is being transcribed.',
       timeoutMs: 6_000,
+    };
+  },
+
+  databaseRepaired(recovered: number, unreadable: number): NewNotice {
+    return {
+      kind: 'database_repaired',
+      status: 'alert',
+      title: 'Speech repaired your history',
+      body:
+        unreadable > 0 || recovered === 0
+          ? `Its file was damaged. ${n(recovered)} items were recovered${unreadable ? ` and ${n(unreadable)} could not be read` : ''}. A copy of the damaged file was kept.`
+          : `Its file was damaged. All ${n(recovered)} items were recovered, and a copy of the damaged file was kept.`,
+      actions: [{ action: 'open_history', label: 'Open History' }],
+      timeoutMs: 12_000,
+    };
+  },
+
+  databaseDamaged(): NewNotice {
+    return {
+      kind: 'database_damaged',
+      status: 'error',
+      title: 'Your history file is damaged',
+      body: 'Dictation keeps working. Restart Speech to repair it; nothing is deleted.',
+      actions: [{ action: 'restart_app', label: 'Restart' }],
+      timeoutMs: 0,
     };
   },
 

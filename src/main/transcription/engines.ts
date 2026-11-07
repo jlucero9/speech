@@ -52,7 +52,7 @@ export class TranscriptionEngines implements TranscriptionEngine {
     return this.current.transcribe(request);
   }
 
-  release(reason: string): void {
-    this.local.release(reason);
+  release(reason: string, whenIdle = false): void {
+    this.local.release(reason, whenIdle);
   }
 }

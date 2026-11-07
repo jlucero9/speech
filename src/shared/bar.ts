@@ -16,7 +16,8 @@ export type NoticeAction =
   | 'open_engines' // abre los ajustes en Engines and Keys (proveedor del formateo y claves)
   | 'open_history' // abre el Hub en el historial
   | 'open_microphone_settings'
-  | 'show_bar'; // deshace «ocultar una hora»
+  | 'show_bar' // deshace «ocultar una hora»
+  | 'restart_app'; // reinicia Speech (para reparar la base de datos)
 
 export interface Notice {
   /** Creciente: un aviso nuevo con el mismo tipo se distingue del anterior. */

@@ -572,3 +572,132 @@ button {
     animation: none !important;
   }
 }
+
+/* ——— Menú contextual ——— */
+/* Tema claro aunque la barra sea oscura. La capa ocupa toda la ventana, que
+   mientras el menú está abierto cubre el área útil: un clic en ella lo cierra. */
+
+.menu-layer {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.004);
+}
+
+.menu {
+  --menu-fg: #1a1a1a;
+  --menu-muted: #71716e;
+  --menu-hover: #f5f4f0;
+  --menu-line: #eeebe3;
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  padding: 5px;
+  border: 1px solid var(--menu-line);
+  border-radius: 10px;
+  background: var(--sand-50);
+  color: var(--menu-fg);
+  box-shadow: 0 25px 50px -12px rgba(26, 26, 26, 0.25);
+  animation: menu-in 0.08s ease-out;
+}
+.menu[data-edge='bottom']:not(.submenu) {
+  left: 50%;
+  bottom: 50px;
+  translate: -50% 0;
+}
+.menu[data-edge='left']:not(.submenu) {
+  left: 50px;
+  top: 50%;
+  translate: 0 -50%;
+}
+.menu[data-edge='right']:not(.submenu) {
+  right: 50px;
+  top: 50%;
+  translate: 0 -50%;
+}
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 240px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 15px;
+  line-height: 20px;
+  font-weight: 400;
+  text-align: left;
+  color: inherit;
+  cursor: default;
+}
+.menu-item:hover,
+.menu-item[data-active] {
+  background: var(--menu-hover);
+}
+.menu-icon {
+  display: flex;
+  min-width: 16px;
+  justify-content: center;
+  flex: none;
+}
+.menu-label {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 320px;
+}
+.menu-trailing {
+  display: flex;
+  align-items: center;
+  margin-left: 16px;
+  color: var(--menu-muted);
+}
+.menu-separator {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--menu-line);
+  flex: none;
+}
+
+/* Submenú del micrófono, al lado de su entrada. */
+.menu-sub-anchor {
+  position: relative;
+}
+.submenu {
+  top: -6px;
+  left: calc(100% + 6px);
+}
+.menu[data-edge='right'] .submenu {
+  left: auto;
+  right: calc(100% + 6px);
+}
+.submenu-scroll {
+  display: flex;
+  flex-direction: column;
+  max-height: 250px;
+  overflow-y: auto;
+}
+.submenu-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.submenu-scroll::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background: var(--sand-700);
+}
+.menu-note {
+  padding: 6px 8px;
+  max-width: 340px;
+  font-size: 15px;
+  line-height: 20px;
+}
+/* Abajo, el submenú crece hacia arriba desde su entrada: no se sale de la pantalla. */
+.menu[data-edge='bottom'] .submenu {
+  top: auto;
+  bottom: 0;
+}

@@ -7,7 +7,7 @@ import type { FormatRequest } from './formatter';
 // El riesgo de un modelo pequeño es que responda a lo dictado en vez de
 // limpiarlo, o que lo reescriba. Por eso el dictado va entre etiquetas, los
 // ejemplos incluyen una pregunta y una orden que no se contestan, y la
-// respuesta pasa después por `checkFidelity`.
+// respuesta pasa después por `checkFidelity` y `restoreSpokenWords`.
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -146,6 +146,127 @@ export function checkFidelity(input: string, output: string, vocabulary: string[
   if (ratio > 1.3 && outWords.length - inWords.length > 3) return `grew from ${inWords.length} to ${outWords.length} words`;
   if (ratio < 0.5 && inWords.length - outWords.length > 3) return `shrank from ${inWords.length} to ${outWords.length} words`;
   return null;
+}
+
+/** Tope del alineamiento (palabras de entrada × de salida): unos 2 000 × 2 000. */
+const MAX_ALIGN_CELLS = 4_000_000;
+
+interface Token {
+  word: string;
+  start: number;
+  end: number;
+}
+
+function tokens(s: string): Token[] {
+  const out: Token[] = [];
+  // «can't», «l'ami»: el apóstrofo no parte la palabra.
+  for (const m of s.matchAll(/[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*/gu)) {
+    out.push({ word: normalize(m[0]), start: m.index, end: m.index + m[0].length });
+  }
+  return out;
+}
+
+function normalize(w: string): string {
+  return w.toLowerCase().normalize('NFD').replace(/\p{M}/gu, '').replace(/’/g, "'");
+}
+
+/** Tramos donde la salida no coincide con la entrada, sobre la subsecuencia común más larga. */
+function diffHunks(a: Token[], b: Token[]): { del: [number, number]; ins: [number, number] }[] {
+  const n = a.length;
+  const m = b.length;
+  const L = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      L[i][j] = a[i].word === b[j].word ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+    }
+  }
+  const out: { del: [number, number]; ins: [number, number] }[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < n || j < m) {
+    if (i < n && j < m && a[i].word === b[j].word) {
+      i++;
+      j++;
+      continue;
+    }
+    const i0 = i;
+    const j0 = j;
+    while ((i < n || j < m) && !(i < n && j < m && a[i].word === b[j].word)) {
+      if (j < m && (i >= n || L[i][j + 1] >= L[i + 1][j])) j++;
+      else i++;
+    }
+    out.push({ del: [i0, i], ins: [j0, j] });
+  }
+  return out;
+}
+
+export interface RestoredWords {
+  text: string;
+  /** Cada cambio deshecho, «dicho → escrito por el modelo», para el registro. */
+  restored: string[];
+}
+
+/**
+ * Deja en el texto formateado las palabras que se dijeron. El modelo solo debe
+ * puntuar, quitar muletillas y quedarse con la corrección cuando el hablante
+ * se corrige; a veces, además, cambia una palabra («puedo» por «puedes», «a»
+ * por «por») o añade una, y eso cambia el sentido aunque la frase siga casi
+ * igual: la comprobación de fidelidad no lo ve. Aquí se alinean las palabras
+ * y, donde el modelo puso otras, vuelven las dichas; donde añadió, se quitan.
+ * Se respeta lo que solo une o separa la misma palabra («por que» → «porque»)
+ * y los términos del diccionario. Las palabras que el modelo quitó no vuelven:
+ * eso ya lo vigila `checkFidelity`.
+ */
+export function restoreSpokenWords(input: string, output: string, vocabulary: string[] = []): RestoredWords {
+  const a = tokens(input);
+  const b = tokens(output);
+  if (!a.length || !b.length || a.length * b.length > MAX_ALIGN_CELLS) return { text: output, restored: [] };
+  const vocab = new Set(vocabulary.flatMap(words));
+  const edits: { start: number; end: number; text: string }[] = [];
+  const restored: string[] = [];
+  for (const h of diffHunks(a, b)) {
+    const ins = b.slice(h.ins[0], h.ins[1]);
+    if (!ins.length) continue; // solo quitó palabras
+    const del = a.slice(h.del[0], h.del[1]);
+    if (del.map((t) => t.word).join('') === ins.map((t) => t.word).join('')) continue;
+    if (ins.every((t) => vocab.has(t.word))) continue;
+    // Lo dicho, sin las muletillas que el modelo quitó con razón.
+    const spoken = del.filter((t) => !FILLERS.has(t.word));
+    let start = ins[0].start;
+    let end = ins[ins.length - 1].end;
+    let text: string;
+    if (spoken.length) {
+      text = input.slice(spoken[0].start, spoken[spoken.length - 1].end);
+      if (/^\p{Lu}/u.test(output.slice(start)) && /^\p{Ll}/u.test(text)) text = text[0].toUpperCase() + text.slice(1);
+    } else {
+      // Solo añadió: se quita lo añadido, con su coma o, si era una frase
+      // entera, con su punto, y un espacio.
+      text = '';
+      const opensSentence = start === 0 || /[.!?¡¿]\s*$/.test(output.slice(0, start));
+      const trailing = output.slice(end).match(opensSentence ? /^[,;:.!?]+/ : /^[,;:]/);
+      if (trailing) end += trailing[0].length;
+      if (/^\s*(?:[.!?]|$)/.test(output.slice(end))) {
+        // Cerraba la frase: se va también la coma de antes («mañana, sin falta.»).
+        start -= output.slice(0, start).match(/\s*[,;:]?\s*$/)?.[0].length ?? 0;
+      } else if (output[end] === ' ') end++;
+      else if (output[start - 1] === ' ') start--;
+    }
+    restored.push(`${spoken.map((t) => t.word).join(' ') || '∅'} → ${ins.map((t) => t.word).join(' ')}`);
+    edits.push({ start, end, text });
+  }
+  if (!edits.length) return { text: output, restored };
+  let text = output;
+  for (const e of edits.reverse()) {
+    const piece = e.text;
+    // Si lo quitado abría la frase, la siguiente palabra pasa a abrirla.
+    if (!piece && /^\p{Lu}/u.test(text.slice(e.start)) && (e.start === 0 || /[.!?¡¿]\s*$/.test(text.slice(0, e.start)))) {
+      const rest = text.slice(e.end).replace(/^(\P{L}*)(\p{Ll})/u, (_m, lead: string, c: string) => lead + c.toUpperCase());
+      text = text.slice(0, e.start) + rest;
+      continue;
+    }
+    text = text.slice(0, e.start) + piece + text.slice(e.end);
+  }
+  return { text, restored };
 }
 
 /** Muletillas y marcas de corrección, que el formateo quita a propósito (ya sin tildes). */

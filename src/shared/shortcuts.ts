@@ -331,29 +331,3 @@ export function firstBinding(list: readonly ShortcutBinding[], action: ShortcutA
   return list.find((b) => b.action === action) ?? null;
 }
 
-/**
- * Acelerador de Electron para el menú de la barra (solo para enseñarlo), o
- * undefined si el atajo no se puede escribir así.
- */
-export function accelerator(b: ShortcutBinding | null): string | undefined {
-  if (!b) return undefined;
-  const mods: Record<number, string> = {
-    [ANY_SIDE.command]: 'Command',
-    [ANY_SIDE.control]: 'Control',
-    [ANY_SIDE.option]: 'Alt',
-    [ANY_SIDE.shift]: 'Shift',
-  };
-  const parts: string[] = [];
-  for (const k of b.keys) {
-    if (mods[k]) parts.push(mods[k]);
-    else if (isModifier(k)) return undefined;
-    else {
-      const label = keyLabel(k, b.names);
-      if (label === 'Space') parts.push('Space');
-      else if (label === 'esc') parts.push('Escape');
-      else if (/^F\d+$/.test(label) || /^[a-z0-9]$/i.test(label)) parts.push(label.toUpperCase());
-      else return undefined;
-    }
-  }
-  return parts.join('+');
-}

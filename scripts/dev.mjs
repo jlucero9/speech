@@ -3,9 +3,10 @@
 //   npm run start:debug  igual, con los inspectores de main (9339) y de las
 //                        ventanas (9338) abiertos en 127.0.0.1, y SPEECH_DEBUG=1
 //
-// El registro se muestra aquí; Ctrl+C cierra la app.
-import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+// El registro se muestra aquí; Ctrl+C cierra la app. Este proceso termina
+// cuando se cierra la app que abrió (también si otro arranque la reinicia).
+import { execFileSync, spawnSync } from 'node:child_process';
+import { closeSync, cpSync, existsSync, mkdirSync, openSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -52,6 +53,28 @@ async function esperar(cond, ms) {
     await new Promise((r) => setTimeout(r, 100));
   }
   return cond();
+}
+
+/** Procesos cuya línea de órdenes empieza así, salvo este. */
+function procesos(patron) {
+  try {
+    return execFileSync('pgrep', ['-f', patron], { encoding: 'utf8' })
+      .trim()
+      .split('\n')
+      .map(Number)
+      .filter((p) => p && p !== process.pid);
+  } catch {
+    return [];
+  }
+}
+
+// Restos de arranques anteriores: otros dev.mjs que siguen mostrando el
+// registro y, de versiones anteriores de este script, los `tail` que lo
+// seguían y quedaban vivos si su dev.mjs moría sin cerrarlos.
+for (const p of [...procesos('node scripts/dev\\.mjs'), ...procesos(`^tail -n \\+1 -F ${LOG}$`)]) {
+  try {
+    process.kill(p, 'SIGTERM');
+  } catch {}
 }
 
 paso('node', ['scripts/build.mjs']);
@@ -106,19 +129,45 @@ if (!(await esperar(() => pidEnMarcha() !== null, 10000))) {
 const pid = pidEnMarcha();
 console.log(`\nSpeech en marcha (pid ${pid}). Icono en la barra de menús. Ctrl+C para cerrarla.\n`);
 
-const tail = spawn('tail', ['-n', '+1', '-F', LOG], { stdio: ['ignore', 'inherit', 'ignore'] });
-const salir = (code) => {
-  tail.kill();
-  process.exit(code);
+// El registro se sigue desde aquí, sin otro proceso que pueda quedar huérfano.
+let leido = 0;
+const mostrar = () => {
+  let tam;
+  try {
+    tam = statSync(LOG).size;
+  } catch {
+    return;
+  }
+  if (tam < leido) leido = 0;
+  if (tam === leido) return;
+  const fd = openSync(LOG, 'r');
+  try {
+    const buf = Buffer.alloc(tam - leido);
+    const n = readSync(fd, buf, 0, buf.length, leido);
+    leido += n;
+    process.stdout.write(buf.subarray(0, n));
+  } finally {
+    closeSync(fd);
+  }
+};
+const vivo = (p) => {
+  try {
+    process.kill(p, 0);
+    return true;
+  } catch {
+    return false;
+  }
 };
 process.on('SIGINT', () => {
-  const p = pidEnMarcha();
-  if (p) process.kill(p, 'SIGTERM');
-  salir(0);
+  if (vivo(pid)) process.kill(pid, 'SIGTERM');
+  process.exit(0);
 });
+// Si otro arranque cierra esta instancia, este proceso también termina.
 setInterval(() => {
-  if (!pidEnMarcha()) {
+  mostrar();
+  if (!vivo(pid)) {
+    mostrar();
     console.log('\nSpeech se ha cerrado.');
-    salir(0);
+    process.exit(0);
   }
-}, 1000);
+}, 250);

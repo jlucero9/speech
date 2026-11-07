@@ -294,17 +294,32 @@ final class Keyboard {
         for (i, k) in ups { onKey?(i, k, false, hidden, nil) }
     }
 
-    /// Estado real de una tecla. Los modificadores se leen de las banderas
-    /// globales; el resto, del estado de teclas de la sesión.
+    /// Estado real de una tecla, en el teclado físico. El estado de la sesión
+    /// no sirve: incluye las teclas que publican otros programas, y uno que
+    /// publique ⌘ pulsada sin soltarla la deja «pulsada» ahí aunque nadie la
+    /// toque; entonces una suelta perdida de ⌘ no se corregiría nunca y los
+    /// atajos con ⌘ dejarían de responder. Los modificadores se leen de las
+    /// banderas; el resto, del estado de cada tecla.
+    ///
+    /// fn es la excepción: se mira también la sesión, porque si el teclado
+    /// físico no la informara, darla por suelta cortaría el dictado en marcha.
+    /// Dejarla pulsada de más solo retrasa la corrección.
     static func isKeyDown(_ key: Int) -> Bool {
-        if let bits = modifierBits[key] {
-            let flags = CGEventSource.flagsState(.combinedSessionState).rawValue
-            if flags & bits.family == 0 { return false }
-            let sideBits = deviceBitsByFamily[bits.family] ?? 0
-            if bits.device != 0, flags & sideBits != 0 { return flags & bits.device != 0 }
-            return true
+        if key == 0x3F {
+            return modifierDown(key, in: .hidSystemState) || modifierDown(key, in: .combinedSessionState)
+                || CGEventSource.keyState(.hidSystemState, key: CGKeyCode(key))
         }
-        return CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(key))
+        if modifierBits[key] != nil { return modifierDown(key, in: .hidSystemState) }
+        return CGEventSource.keyState(.hidSystemState, key: CGKeyCode(key))
+    }
+
+    private static func modifierDown(_ key: Int, in state: CGEventSourceStateID) -> Bool {
+        guard let bits = modifierBits[key] else { return false }
+        let flags = CGEventSource.flagsState(state).rawValue
+        if flags & bits.family == 0 { return false }
+        let sideBits = deviceBitsByFamily[bits.family] ?? 0
+        if bits.device != 0, flags & sideBits != 0 { return flags & bits.device != 0 }
+        return true
     }
 
     // MARK: Callback (hilo del tap)

@@ -1,16 +1,12 @@
 import { useEffect, useState } from 'react';
-import type { MicrophoneDevice, SharedState } from '../../shared/state';
+import { builtInMicrophone as builtIn, microphoneChoices, type MicrophoneChoice as Choice } from '../../shared/microphones';
+import type { SharedState } from '../../shared/state';
 import { CloseIcon } from '../hub/icons';
 
 // Micrófono del dictado: el del equipo, «el del sistema» (sigue lo que diga
 // macOS) o cualquier otro conectado. El elegido enseña su nivel en vivo; la
 // ventana de grabación abre el micrófono solo mientras el diálogo está a la
 // vista, y nunca durante un dictado.
-
-/** El micrófono del Mac, si está conectado. */
-function builtIn(devices: MicrophoneDevice[]): MicrophoneDevice | null {
-  return devices.find((d) => /built-in|macbook.*microphone|imac.*microphone/i.test(d.label)) ?? null;
-}
 
 /** Lo que se ve en la fila de ajustes. */
 export function microphoneName(state: SharedState): string {
@@ -22,36 +18,12 @@ export function microphoneName(state: SharedState): string {
   return connected ? name : `${name} (not connected, using Auto-detect)`;
 }
 
-interface Choice {
-  key: string;
-  device: MicrophoneDevice | null;
-  title: string;
-  subtitle?: string;
-}
-
 export function MicrophoneDialog({ state, onClose }: { state: SharedState; onClose: () => void }) {
   const p = state.prefs;
-  const { devices, systemDefault } = state.microphones;
+  const { devices } = state.microphones;
   const level = useLevel();
 
-  const mac = builtIn(devices);
-  const choices: Choice[] = [];
-  if (mac) choices.push({ key: mac.id, device: mac, title: 'Built-in mic (recommended)' });
-  choices.push({ key: '', device: null, title: `Auto-detect${systemDefault ? ` (${systemDefault})` : ''}`, subtitle: 'From computer settings' });
-  for (const d of devices) if (d !== mac) choices.push({ key: d.id, device: d, title: d.label });
-  // El elegido, aunque ahora no esté conectado.
-  const selectedChoice =
-    choices.find((c) => c.device && (c.device.id === p.microphoneId || c.device.label === p.microphoneLabel)) ??
-    (p.microphoneId ? null : choices.find((c) => c.key === ''));
-  if (p.microphoneId && !selectedChoice) {
-    choices.push({
-      key: p.microphoneId,
-      device: { id: p.microphoneId, label: p.microphoneLabel },
-      title: p.microphoneLabel,
-      subtitle: 'Not connected. Dictation uses Auto-detect until it is back.',
-    });
-  }
-  const selectedKey = selectedChoice?.key ?? p.microphoneId;
+  const { choices, selectedKey } = microphoneChoices(p, state.microphones);
   const selected = choices.find((c) => c.key === selectedKey);
 
   // Medir el elegido mientras el diálogo está abierto.

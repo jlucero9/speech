@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import type { Readable, Writable } from 'node:stream';
@@ -8,6 +8,7 @@ import {
   type HelperIncoming,
   type HelperRequests,
   type HelperRequestType,
+  type MemoryPressureLevel,
 } from '../../shared/helper-protocol';
 import type { HelperState } from '../../shared/state';
 import { logger } from '../log';
@@ -21,6 +22,9 @@ import { logger } from '../log';
 //   retraso), no se culpa al helper: se reinicia la cuenta.
 // - Relanzado tras una muerte: 0, 1, 2, 4, 8 y 16 s. Agotados, queda en
 //   'failed' hasta que se pida a mano. Tras 60 s estable, la cuenta vuelve a 0.
+// - Si muere de golpe con la salida de audio silenciada, el helper relanzado
+//   le devuelve el sonido al arrancar (deja una marca en `dataDir`). Si ya no
+//   se relanza, main ejecuta el helper solo para eso.
 
 const log = logger('helper');
 
@@ -42,6 +46,8 @@ type Pending = {
 export interface HelperProcessEvents {
   state: [HelperState];
   ready: [];
+  /** Presión de memoria del sistema: al arrancar el helper y cada vez que cambia. */
+  memoryPressure: [MemoryPressureLevel];
   event: [{ [K in keyof HelperEvents]: { type: K; payload: HelperEvents[K] } }[keyof HelperEvents]];
 }
 
@@ -59,8 +65,15 @@ export class HelperProcess extends EventEmitter<HelperProcessEvents> {
   private pingInFlight = false;
   private stopping = false;
 
-  constructor(private readonly executable: string) {
+  constructor(
+    private readonly executable: string,
+    /** Carpeta de datos de la app: ahí deja el helper la marca de la salida silenciada. */
+    private readonly dataDir: string,
+  ) {
     super();
+    this.on('event', (e) => {
+      if (e.type === 'MemoryPressure') this.emit('memoryPressure', e.payload.level);
+    });
   }
 
   get current(): HelperState {
@@ -138,7 +151,7 @@ export class HelperProcess extends EventEmitter<HelperProcessEvents> {
     try {
       child = spawn(this.executable, [], {
         stdio: ['pipe', 'pipe', 'pipe', 'pipe'],
-        env: { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', HOME: process.env.HOME ?? '' },
+        env: { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', HOME: process.env.HOME ?? '', SPEECH_DATA_DIR: this.dataDir },
       });
     } catch (err) {
       this.onExit(null, null, `spawn failed: ${(err as Error).message}`);
@@ -169,6 +182,7 @@ export class HelperProcess extends EventEmitter<HelperProcessEvents> {
         if (this.child !== child) return;
         log.info(`Helper ready: pid ${ack.payload.pid}, launch ${ack.payload.launchMs} ms, disclaimed ${ack.payload.disclaimed}`);
         this.setState({ status: 'ready', lastError: null });
+        if (ack.payload.memoryPressure) this.emit('memoryPressure', ack.payload.memoryPressure);
         this.stableTimer = setTimeout(() => {
           this.attempt = 0;
           this.setState({ restarts: 0 });
@@ -271,6 +285,7 @@ export class HelperProcess extends EventEmitter<HelperProcessEvents> {
 
     if (this.attempt >= BACKOFF_MS.length) {
       log.error(`Helper failed ${this.attempt} times in a row; giving up until asked to retry`);
+      this.restoreOutputMute();
       this.setState({
         status: 'failed',
         pid: null,
@@ -290,6 +305,19 @@ export class HelperProcess extends EventEmitter<HelperProcessEvents> {
     });
     log.info(`Relaunching helper in ${delay} ms (attempt ${this.attempt} of ${BACKOFF_MS.length})`);
     this.relaunchTimer = setTimeout(() => this.launch(), delay);
+  }
+
+  /** Sin helper vivo: lo ejecuta solo para devolver el sonido que dejó silenciado. */
+  private restoreOutputMute(): void {
+    execFile(
+      this.executable,
+      ['--restore-output-mute'],
+      { env: { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', HOME: process.env.HOME ?? '', SPEECH_DATA_DIR: this.dataDir }, timeout: 10_000 },
+      (err, _out, stderr) => {
+        if (err) log.warn(`Could not restore the output mute: ${err.message}`);
+        for (const line of stderr.split('\n')) if (line.trim()) log.info(`(restore) ${line}`);
+      },
+    );
   }
 
   private clearTimers(): void {

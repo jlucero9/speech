@@ -20,6 +20,11 @@ const api: BarApi = {
     ipcRenderer.on(BAR_IPC.sound, handler);
     return () => ipcRenderer.removeListener(BAR_IPC.sound, handler);
   },
+  onMenu: (listener) => {
+    const handler = (_e: unknown, open: boolean) => listener(open === true);
+    ipcRenderer.on(BAR_IPC.menu, handler);
+    return () => ipcRenderer.removeListener(BAR_IPC.menu, handler);
+  },
 };
 
 contextBridge.exposeInMainWorld('bar', api);

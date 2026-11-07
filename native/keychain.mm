@@ -7,11 +7,21 @@
 // demás devuelve errSecInteractionNotAllowed si hiciera falta uno, para que un
 // dictado nunca abra un diálogo.
 //
+// El interruptor de los avisos (SecKeychainSetUserInteractionAllowed) es de
+// todo el proceso, y las operaciones corren a la vez en hilos distintos. Por
+// eso se cuenta: las operaciones sin aviso pueden solaparse, el interruptor se
+// apaga con la primera y vuelve a su valor con la última. La que puede avisar
+// va sola, y mientras espera tu respuesta las demás no tocan el llavero:
+// devuelven kBusy al momento (ni leen con los avisos permitidos ni dejan un
+// dictado esperando al diálogo).
+//
 // Se compila con scripts/build.mjs (Node-API, sin dependencias).
 
 #include <node_api.h>
 #import <Foundation/Foundation.h>
 #import <Security/Security.h>
+#include <condition_variable>
+#include <mutex>
 #include <string>
 
 static NSString* const kService = @"local.speech.api-keys";
@@ -21,6 +31,40 @@ static NSString* const kService = @"local.speech.api-keys";
 // La única forma de impedir avisos en los llaveros de fichero.
 static void AllowUI(bool on) { SecKeychainSetUserInteractionAllowed(on); }
 #pragma clang diagnostic pop
+
+// Hay un aviso del llavero abierto (o a punto de abrirse): vuelva a intentarlo después.
+static const OSStatus kBusy = -1;
+
+static std::mutex gMutex;
+static std::condition_variable gIdle;
+// Protegidos por gMutex.
+static int gQuiet = 0;         // operaciones en curso con los avisos apagados
+static bool gPrompting = false;  // operación en curso que puede avisar
+
+// Devuelve false si no puede empezar (hay un aviso abierto).
+static bool Enter(bool interactive) {
+  std::unique_lock<std::mutex> lock(gMutex);
+  if (interactive) {
+    // Espera a que acaben las demás (milisegundos) y se queda sola.
+    gIdle.wait(lock, [] { return gQuiet == 0 && !gPrompting; });
+    gPrompting = true;
+    AllowUI(true);
+    return true;
+  }
+  if (gPrompting) return false;
+  if (gQuiet++ == 0) AllowUI(false);
+  return true;
+}
+
+static void Leave(bool interactive) {
+  std::lock_guard<std::mutex> lock(gMutex);
+  if (interactive) {
+    gPrompting = false;
+  } else if (--gQuiet == 0) {
+    AllowUI(true);
+  }
+  gIdle.notify_all();
+}
 
 static NSMutableDictionary* Query(const std::string& account) {
   return [@{
@@ -44,8 +88,12 @@ struct Work {
 
 static void Execute(napi_env, void* data) {
   Work* w = static_cast<Work*>(data);
+  const bool interactive = w->kind == Kind::Get && w->interactive;
+  if (!Enter(interactive)) {
+    w->status = kBusy;
+    return;
+  }
   @autoreleasepool {
-    AllowUI(w->kind == Kind::Get && w->interactive);
     NSMutableDictionary* q = Query(w->account);
     switch (w->kind) {
       case Kind::Status: {
@@ -71,6 +119,20 @@ static void Execute(napi_env, void* data) {
         break;
       }
       case Kind::Set: {
+        // Solo se reemplaza una clave que esta app puede leer. El llavero liga
+        // la lectura al binario exacto que creó el ítem, pero deja escribir a
+        // cualquiera: reemplazarla desde otro binario (Speech actualizada) la
+        // dejaría ilegible para todos sin decir nada.
+        NSMutableDictionary* probe = Query(w->account);
+        probe[(__bridge id)kSecReturnData] = @YES;
+        probe[(__bridge id)kSecMatchLimit] = (__bridge id)kSecMatchLimitOne;
+        CFTypeRef current = nullptr;
+        OSStatus readable = SecItemCopyMatching((__bridge CFDictionaryRef)probe, &current);
+        if (current) CFRelease(current);
+        if (readable != errSecSuccess && readable != errSecItemNotFound) {
+          w->status = readable;
+          break;
+        }
         NSData* d = [NSData dataWithBytes:w->value.data() length:w->value.size()];
         w->status = SecItemUpdate((__bridge CFDictionaryRef)q,
                                   (__bridge CFDictionaryRef) @{(__bridge id)kSecValueData : d});
@@ -85,8 +147,8 @@ static void Execute(napi_env, void* data) {
         w->status = SecItemDelete((__bridge CFDictionaryRef)q);
         break;
     }
-    AllowUI(true);
   }
+  Leave(interactive);
 }
 
 // Siempre se resuelve con { status, value? }: los códigos los interpreta JS.

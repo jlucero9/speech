@@ -83,13 +83,21 @@ export const BAR_IPC = {
   drag: 'bar:drag',
   /** main → barra: un sonido que reproducir (BarSound). */
   sound: 'bar:sound',
+  /** main → barra: abrir (true) o cerrar (false) el menú contextual. */
+  menu: 'bar:menu',
 } as const;
+
+/** Entradas del menú contextual de la barra (además de elegir micrófono). */
+export type BarMenuItem = 'hide' | 'settings' | 'history' | 'paste_last';
 
 export type BarCommand =
   | { type: 'start' }
   | { type: 'stop' }
   | { type: 'cancel' }
-  | { type: 'menu' }
+  | { type: 'menu' } // clic secundario: abrir el menú
+  | { type: 'menu-closed' }
+  | { type: 'menu-item'; item: BarMenuItem }
+  | { type: 'set-microphone'; id: string; label: string }
   | { type: 'notice-action'; id: number; action: NoticeAction }
   | { type: 'notice-closed'; id: number; why: 'closed' | 'timeout' };
 
@@ -104,6 +112,7 @@ export interface BarApi {
   drag(d: BarDrag): void;
   /** Devuelve la función para darse de baja. */
   onSound(listener: (sound: BarSound) => void): () => void;
+  onMenu(listener: (open: boolean) => void): () => void;
 }
 
 /** Canales de la ventana de grabación (preload/recorder.ts). */

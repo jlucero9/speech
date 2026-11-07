@@ -54,6 +54,9 @@ export interface TranscriptionEngine {
    */
   prepare(language: string): void;
   transcribe(request: TranscriptionRequest): Promise<TranscriptionResult>;
-  /** Libera lo que ocupe. Se puede volver a usar después. */
-  release(reason: string): void;
+  /**
+   * Libera lo que ocupe. Se puede volver a usar después. Con `whenIdle`, si
+   * está transcribiendo, espera a terminar en vez de cortar el trabajo.
+   */
+  release(reason: string, whenIdle?: boolean): void;
 }

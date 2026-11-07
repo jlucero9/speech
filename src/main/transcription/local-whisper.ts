@@ -48,6 +48,8 @@ export class LocalWhisper implements TranscriptionEngine {
   private worker: Loaded | null = null;
   private busy = 0;
   private idleTimer: NodeJS.Timeout | null = null;
+  /** Soltar el modelo en cuanto acabe lo que está transcribiendo. */
+  private releaseAfterWork: string | null = null;
 
   constructor(
     private readonly store: Store,
@@ -131,14 +133,24 @@ export class LocalWhisper implements TranscriptionEngine {
       throw toTranscriptionError(err);
     } finally {
       this.busy--;
-      if (this.worker && this.busy === 0) {
+      if (this.busy === 0 && this.releaseAfterWork) {
+        const reason = this.releaseAfterWork;
+        this.releaseAfterWork = null;
+        this.release(reason);
+      } else if (this.worker && this.busy === 0) {
         this.setTranscriber({ status: 'ready' });
         this.scheduleIdle();
       }
     }
   }
 
-  release(reason: string): void {
+  release(reason: string, whenIdle = false): void {
+    if (whenIdle && this.busy > 0) {
+      if (this.worker && !this.releaseAfterWork) log.info(`Unloading the model after the current transcription (${reason})`);
+      this.releaseAfterWork = reason;
+      return;
+    }
+    this.releaseAfterWork = null;
     this.clearIdle();
     const w = this.worker;
     if (!w) return;

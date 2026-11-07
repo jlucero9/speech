@@ -188,7 +188,15 @@ export class Dictation {
     });
     recorder.on('event', (e) => this.onRecorderEvent(e));
     recorder.on('chunk', (id, index, pcm, volume) => this.onChunk(id, index, pcm, volume));
-    helper.on('ready', () => this.syncHelper());
+    helper.on('ready', () => {
+      this.syncHelper();
+      // Un helper relanzado ya devolvió el sonido que dejó silenciado el
+      // anterior; si se sigue dictando, se vuelve a silenciar.
+      if (this.muted) {
+        this.muted = false;
+        if (this.current && this.store.get().prefs.muteWhileDictating) this.setMuted(true);
+      }
+    });
   }
 
   private get state(): DictationState {
@@ -432,7 +440,18 @@ export class Dictation {
     this.awaitDone(s);
   }
 
-  private cancel(reason: string, kind: CancelKind, message: string): void {
+  /**
+   * El equipo se va a dormir. Una grabación en marcha se para y su audio queda
+   * en el historial, sin transcribir ni pegar: al despertar, el foco puede
+   * estar en cualquier sitio. El aviso permite recuperarlo.
+   */
+  systemWillSleep(): void {
+    if (!this.active || !this.current) return;
+    const id = this.current.id;
+    this.cancel('system_sleep', 'user', 'Stopped when your Mac went to sleep.', notice.sleepStopped(id));
+  }
+
+  private cancel(reason: string, kind: CancelKind, message: string, n?: NewNotice): void {
     const s = this.current ?? this.closingShown();
     if (!s) return;
     if (this.current === s) {
@@ -444,7 +463,8 @@ export class Dictation {
     s.message = message;
     s.keepAudio = kind === 'user';
     this.setStatus('idle', reason, { handsFree: false, level: 0, last: this.result(s, null) });
-    if (kind === 'user') this.feedback.notify(notice.cancelled(s.id));
+    if (n) this.feedback.notify(n);
+    else if (kind === 'user') this.feedback.notify(notice.cancelled(s.id));
     else if (kind === 'failure') this.feedback.notify(notice.recordingFailed(message, s.id));
   }
 
@@ -784,7 +804,7 @@ export class Dictation {
     const pcm = wav.subarray(WAV_HEADER_BYTES);
     const durationMs = Math.round(pcm.length / BYTES_PER_MS);
     const now = Date.now();
-    const s = savedSession(id, now, pcm.length, this.paster.captureTarget(id, this.store.get().prefs.contextAwareness), false);
+    const s = savedSession(id, now, pcm.length, this.paster.captureTarget(id, this.store.get().prefs.contextAwareness), false, this.store.get().prefs.enableSounds);
     log.info(`Dictation ${short(id)}: recovering ${durationMs} ms of cancelled audio`);
     this.feedback.clearNotice();
     this.engine.prepare(this.store.get().prefs.dictationLanguage);
@@ -810,7 +830,7 @@ export class Dictation {
     }
     const pcm = wav.subarray(WAV_HEADER_BYTES);
     const durationMs = Math.round(pcm.length / BYTES_PER_MS);
-    const s = savedSession(id, Date.now(), pcm.length, Promise.resolve(null), true);
+    const s = savedSession(id, Date.now(), pcm.length, Promise.resolve(null), true, this.store.get().prefs.enableSounds);
     log.info(`Dictation ${short(id)}: retrying ${durationMs} ms of audio from the history`);
     this.retrying.add(id);
     try {
@@ -935,6 +955,13 @@ export class Dictation {
         break;
       case 'failed':
         log.error(`Dictation ${short(s.id)}: recorder failed: ${e.error}`);
+        if (this.current === s && this.state.status === 'listening' && s.bytes >= MIN_KEEP_BYTES) {
+          // El micrófono se fue a mitad (auriculares desconectados, otro
+          // dispositivo): lo grabado hasta ahí se transcribe y se pega.
+          this.stop('microphone_lost');
+          this.feedback.notify(notice.microphoneLost());
+          break;
+        }
         if (this.current === s) {
           this.cancel('recorder_failed', 'failure', `Could not record: ${e.error}`);
         }
@@ -1022,8 +1049,20 @@ export class Dictation {
   }
 }
 
-/** Sesión para un dictado que ya está grabado y guardado en el historial. */
-function savedSession(id: string, now: number, bytes: number, target: Promise<PasteTargetInfo | null>, background: boolean): Session {
+/**
+ * Sesión para un dictado que ya está grabado y guardado en el historial. No se
+ * guardó cuándo sonó la app, pero el sonido de empezar va siempre al
+ * principio de la grabación: con los sonidos activados, no cuenta como voz (si
+ * no, una grabación en silencio pasaría por voz y whisper se inventaría texto).
+ */
+function savedSession(
+  id: string,
+  now: number,
+  bytes: number,
+  target: Promise<PasteTargetInfo | null>,
+  background: boolean,
+  sounds: boolean,
+): Session {
   return {
     id,
     startedAt: now,
@@ -1043,7 +1082,7 @@ function savedSession(id: string, now: number, bytes: number, target: Promise<Pa
     audioAt: now,
     recovered: true,
     background,
-    soundsAt: [],
+    soundsAt: sounds ? [now] : [],
     device: null,
   };
 }

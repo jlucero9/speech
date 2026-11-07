@@ -5,6 +5,7 @@ import type { Store } from '../store';
 import { GeminiFormatter, GroqFormatter } from './cloud';
 import { FormatError, type FormatRequest, type FormatResult, type Formatter } from './formatter';
 import { OLLAMA_URL, OllamaFormatter } from './ollama';
+import { restoreSpokenWords } from './prompt';
 
 // El formateo visto desde el dictado: elige el proveedor según las
 // preferencias, pone el límite de tiempo y, si algo falla, devuelve la
@@ -30,6 +31,8 @@ export type FormattingOutcome =
 
 export class TextFormatting {
   private formatter: Formatter | null = null;
+  /** Memoria del sistema en estado crítico: el modelo local no se carga. */
+  private lowMemory = false;
 
   constructor(
     private readonly store: Store,
@@ -65,20 +68,43 @@ export class TextFormatting {
 
   /** Al empezar a dictar: que el modelo vaya cargando mientras se habla. */
   prepare(): void {
-    if (this.enabled) this.current().prepare();
+    if (this.enabled && !this.skipLocal()) this.current().prepare();
+  }
+
+  /**
+   * Presión de memoria crítica: cargar el modelo local (más de 1 GB) obligaría
+   * al sistema a echar a disco lo que estás usando. Mientras dure, se pega la
+   * transcripción sin limpiar; los proveedores en la nube no cambian.
+   */
+  setLowMemory(on: boolean): void {
+    if (on === this.lowMemory) return;
+    this.lowMemory = on;
+    log.info(on ? 'Memory is critically low: local cleanup paused' : 'Memory recovered: local cleanup resumed');
+  }
+
+  private skipLocal(): boolean {
+    return this.lowMemory && this.store.get().prefs.formattingProvider === 'ollama';
   }
 
   async format(req: Omit<FormatRequest, 'signal'>, signal: AbortSignal): Promise<FormattingOutcome> {
     if (!this.enabled) return { result: 'off', text: req.text };
     const f = this.current();
+    if (this.skipLocal()) {
+      log.warn(`Dictation ${req.id.slice(0, 8)}: not formatted (low_memory), pasting the transcript`);
+      return { result: 'raw_low_memory', text: req.text, error: 'memory pressure is critical', provider: f.provider, model: f.model, ms: 0 };
+    }
     const words = req.text.split(/\s+/).filter(Boolean).length;
     const timeoutMs = TIMEOUT_BASE_MS + TIMEOUT_PER_WORD_MS * words;
     const t0 = Date.now();
     try {
       const formatted = await f.format({ ...req, signal: AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) });
+      // Las palabras que el modelo cambió o añadió vuelven a ser las dichas.
+      const spoken = restoreSpokenWords(req.text, formatted.text, req.vocabulary);
+      formatted.text = spoken.text;
       log.info(
         `Dictation ${req.id.slice(0, 8)}: formatted with ${f.model} in ${formatted.ms} ms` +
-          (formatted.detail ? ` (${formatted.detail})` : ''),
+          (formatted.detail ? ` (${formatted.detail})` : '') +
+          (spoken.restored.length ? `; restored ${spoken.restored.length} changed or added words` : ''),
       );
       if (this.store.get().formatting.status !== 'ready') void this.check();
       return { result: 'formatted', text: formatted.text, formatted };
