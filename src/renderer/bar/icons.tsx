@@ -140,3 +140,13 @@ export function ChevronRightIcon(p: IconProps) {
     </Svg>
   );
 }
+
+/** La marca de Speech: círculo con tres barras de voz. */
+export function LogoIcon({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden>
+      <circle cx="12" cy="12" r="12" fill="currentColor" />
+      <path d="M8 10v4M12 7v10M16 9.5v5" stroke="#000" strokeWidth="2.2" strokeLinecap="round" />
+    </svg>
+  );
+}

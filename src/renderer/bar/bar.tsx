@@ -14,6 +14,7 @@ import {
   GearIcon,
   HistoryIcon,
   InfoIcon,
+  LogoIcon,
   MicIcon,
   MicOutlineIcon,
   PasteIcon,
@@ -349,6 +350,7 @@ function NoticeCard({ notice, edge, raised }: { notice: Notice; edge: BarEdge; r
     (why: 'closed' | 'timeout') => api.command({ type: 'notice-closed', id: notice.id, why }),
     [notice.id],
   );
+  if (notice.kind === 'paste_failed_text') return <TranscriptCard notice={notice} edge={edge} raised={raised} close={close} />;
   const flagged = notice.status === 'error' || notice.status === 'alert';
   return (
     <div
@@ -401,6 +403,74 @@ function NoticeCard({ notice, edge, raised }: { notice: Notice; edge: BarEdge; r
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Aviso de un dictado que no encontró dónde pegarse: enseña el texto y deja
+ * copiarlo. Tras copiar dice «Copied!» un momento y se cierra.
+ */
+function TranscriptCard({
+  notice,
+  edge,
+  raised,
+  close,
+}: {
+  notice: Notice;
+  edge: BarEdge;
+  raised: boolean;
+  close: (why: 'closed' | 'timeout') => void;
+}) {
+  const [paused, setPaused] = useState(false);
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const t = setTimeout(() => close('closed'), 1_200);
+    return () => clearTimeout(t);
+  }, [copied, close]);
+  return (
+    <div
+      className="card card-transcript"
+      data-edge={edge}
+      data-raised={raised}
+      data-hot=""
+      onMouseEnter={() => setPaused(true)}
+      onMouseLeave={() => setPaused(false)}
+    >
+      <div className="card-header">
+        <div className="card-title-row">
+          <LogoIcon size={16} />
+        </div>
+        <span className="card-hint">{notice.title}</span>
+        <CloseRing
+          timeoutMs={copied ? 0 : notice.timeoutMs}
+          paused={paused}
+          onClose={() => close('closed')}
+          onDone={() => close('timeout')}
+        />
+      </div>
+      <p className="card-transcript-text">{notice.body}</p>
+      <div className="card-actions">
+        <button
+          className="action action-copy"
+          tabIndex={-1}
+          disabled={copied}
+          onClick={() => {
+            setCopied(true);
+            api.command({ type: 'notice-action', id: notice.id, action: 'copy_text' });
+          }}
+        >
+          {copied ? (
+            <>
+              <CheckIcon size={14} strokeWidth={2.4} />
+              <span>Copied!</span>
+            </>
+          ) : (
+            'Copy'
+          )}
+        </button>
+      </div>
     </div>
   );
 }

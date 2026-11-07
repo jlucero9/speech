@@ -701,3 +701,55 @@ button {
   top: auto;
   bottom: 0;
 }
+
+/* Aviso con el texto de un dictado que no se pudo pegar. */
+.card-transcript {
+  width: 424px;
+  max-width: 424px;
+  gap: 14px;
+  padding: 18px 20px 20px;
+}
+.card-transcript .card-title-row {
+  color: var(--sand-50);
+}
+.card-hint {
+  flex: 1;
+  min-width: 0;
+  text-align: right;
+  font-size: 13px;
+  color: var(--vast-700);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.card-transcript-text {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.35;
+  color: var(--vast-300);
+  overflow-wrap: break-word;
+  /* Un dictado largo no tapa la pantalla: se ve el principio. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
+  overflow: hidden;
+}
+.card-transcript .card-actions {
+  padding-top: 14px;
+}
+.action-copy {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 13px;
+  border-radius: 10px;
+  background: #73736e;
+  color: var(--sand-50);
+  font-size: 15px;
+}
+.action-copy:hover {
+  background: #84847e;
+}
+.action-copy:disabled {
+  cursor: default;
+}

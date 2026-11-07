@@ -16,6 +16,19 @@ export function setNoticeShortcuts(ptt: string, pasteLast: string | null): void 
 const n = (v: number): string => v.toLocaleString('en-US');
 
 export const notice = {
+  /** El dictado no encontró dónde pegarse: su texto, con un botón para copiarlo. */
+  pasteFailedWithText(text: string, dictationId: string): NewNotice {
+    return {
+      kind: 'paste_failed_text',
+      status: 'info',
+      title: 'Select a textbox first, then dictate',
+      body: text,
+      actions: [{ action: 'copy_text', label: 'Copy' }],
+      timeoutMs: 10_000,
+      dictationId,
+      sound: false,
+    };
+  },
   pasteFailed(dictationId: string | null): NewNotice {
     return {
       kind: 'paste_failed',

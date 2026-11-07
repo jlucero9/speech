@@ -16,8 +16,10 @@ import { logger } from '../log';
 // Arranca el helper Swift como proceso hijo y lo mantiene vivo.
 //
 // - «Listo»: el helper contesta ACK a IsReady (10 s de plazo al arrancar).
-// - Latido: cada 500 ms se mira cuánto hace de la última respuesta; a los 2 s
-//   se envía IsReady; a los 15 s se da por colgado, se mata y se relanza.
+// - Latido: cada 500 ms. Si main lleva 2 s sin enviarle nada, envía IsReady
+//   (el helper se cierra si pasa 15 s sin oír a main, aunque él sí hable: al
+//   escribir, sus eventos de teclas no cuentan como mensajes de main). Si el
+//   helper lleva 15 s sin decir nada, se da por colgado, se mata y se relanza.
 // - Si main estuvo bloqueado o el equipo durmió (un tic llega con más de 5 s de
 //   retraso), no se culpa al helper: se reinicia la cuenta.
 // - Relanzado tras una muerte: 0, 1, 2, 4, 8 y 16 s. Agotados, queda en
@@ -61,6 +63,7 @@ export class HelperProcess extends EventEmitter<HelperProcessEvents> {
   private stableTimer: NodeJS.Timeout | null = null;
   private tickTimer: NodeJS.Timeout | null = null;
   private lastResponseAt = 0;
+  private lastRequestAt = 0;
   private lastTickAt = 0;
   private pingInFlight = false;
   private stopping = false;
@@ -139,6 +142,7 @@ export class HelperProcess extends EventEmitter<HelperProcessEvents> {
         timer,
       });
       stdin.write(JSON.stringify({ kind: 'request', id, type, payload }) + '\n');
+      this.lastRequestAt = Date.now();
     });
   }
 
@@ -253,7 +257,10 @@ export class HelperProcess extends EventEmitter<HelperProcessEvents> {
       log.error(`Helper silent for ${silence} ms, killing it`);
       this.setState({ lastError: 'The helper stopped responding.' });
       this.child.kill('SIGKILL');
-    } else if (silence >= PING_AFTER_MS && !this.pingInFlight) {
+    } else if (
+      (silence >= PING_AFTER_MS || now - this.lastRequestAt >= PING_AFTER_MS) &&
+      !this.pingInFlight
+    ) {
       this.pingInFlight = true;
       this.request('IsReady', {}, HUNG_AFTER_MS)
         .catch(() => {

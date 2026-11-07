@@ -64,9 +64,10 @@ export const HUB_EVENTS = {
 
 /**
  * Páginas del Hub. «settings» abre el diálogo de ajustes sobre la página
- * actual, en General; «settings/…», en esa sección.
+ * actual, en General; «settings/…», en esa sección; «settings/shortcuts», en
+ * General con el diálogo de los atajos abierto.
  */
-export const HUB_PAGES = ['dictation', 'dictionary', 'style', 'settings', 'settings/system', 'settings/engines', 'settings/data'] as const;
+export const HUB_PAGES = ['dictation', 'dictionary', 'style', 'settings', 'settings/system', 'settings/engines', 'settings/data', 'settings/shortcuts'] as const;
 export type HubPage = (typeof HUB_PAGES)[number];
 
 export function isHubPage(value: unknown): value is HubPage {

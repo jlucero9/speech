@@ -17,7 +17,8 @@ export type NoticeAction =
   | 'open_history' // abre el Hub en el historial
   | 'open_microphone_settings'
   | 'show_bar' // deshace «ocultar una hora»
-  | 'restart_app'; // reinicia Speech (para reparar la base de datos)
+  | 'restart_app' // reinicia Speech (para reparar la base de datos)
+  | 'copy_text'; // copia el texto del aviso; el aviso se cierra solo poco después
 
 export interface Notice {
   /** Creciente: un aviso nuevo con el mismo tipo se distingue del anterior. */

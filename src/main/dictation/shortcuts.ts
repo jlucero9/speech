@@ -32,8 +32,14 @@ const STALE_KEY_AGE_MS = 2_500;
 const STALE_CHECK_TIMEOUT_MS = 500;
 /** Lo mismo que espera el helper antes de apagar la grabación de un atajo. */
 const RECORDING_TIMEOUT_MS = 60_000;
-/** Con `npm run start:debug` se registra cada tecla recibida del helper. */
+/**
+ * Con `npm run start:debug` se registran las teclas recibidas del helper, pero
+ * solo los modificadores y fn: el resto sale como «other key», sin código, para
+ * que el registro no guarde lo que se escribe.
+ */
 const LOG_KEYS = process.env.SPEECH_DEBUG === '1';
+/** ⌘ derecho (54) a fn (63): ⌘, ⇧, ⇪, ⌥ y ⌃ de los dos lados. */
+const isModifierKey = (key: number): boolean => key >= 54 && key <= 63;
 
 export interface ShortcutEvents {
   down: [ShortcutAction];
@@ -153,7 +159,10 @@ export class ShortcutListener extends EventEmitter<ShortcutEvents> {
     }
     this.lastIndex = index;
     this.hidden = hidden;
-    if (LOG_KEYS) log.info(`Key ${key} ${down ? 'down' : 'up'} (#${index}, ${hidden} other held)`);
+    if (LOG_KEYS) {
+      const what = isModifierKey(key) ? `Key ${key}` : 'Other key';
+      log.info(`${what} ${down ? 'down' : 'up'} (#${index}, ${hidden} other held)`);
+    }
     if (this.recording) {
       this.onRecordingKey(key, down, name);
       return;

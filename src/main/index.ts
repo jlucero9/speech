@@ -37,7 +37,7 @@ import { TextFormatting } from './formatting/service';
 import { TranscriptionEngines } from './transcription/engines';
 import { LocalWhisper } from './transcription/local-whisper';
 import { ModelManager } from './transcription/models';
-import { createTray, setTrayStatus, setTrayWarning } from './tray';
+import { createTray, describeTrayMenu, setTrayStatus, setTrayWarning } from './tray';
 
 const log = logger('main');
 
@@ -233,6 +233,12 @@ function main(): void {
   const runNoticeAction = (id: number, action: NoticeAction): void => {
     const n = notices.current;
     if (n?.id !== id) return;
+    if (action === 'copy_text') {
+      // La barra enseña «Copied!» y cierra el aviso ella misma.
+      if (n.body) clipboard.writeText(n.body);
+      log.info(`Notice ${id}: copied ${n.body?.length ?? 0} chars`);
+      return;
+    }
     notices.close(id, `action ${action}`);
     switch (action) {
       case 'undo_cancel':
@@ -469,7 +475,20 @@ function main(): void {
     if (level === 'critical') engine.release(`memory pressure ${level}`, true);
   });
 
-  createTray(() => showHub());
+  createTray({
+    openHub: (page) => showHub(page),
+    state: () => store.get(),
+    lastTranscript: () => dictation?.lastTranscript() ?? null,
+    pasteLast: () => dictation?.pasteLastFromMenu(),
+    setMicrophone: (id, label) => {
+      if (!isValidPreference('microphoneId', id) || !isValidPreference('microphoneLabel', label)) return;
+      setPreference('microphoneId', id);
+      setPreference('microphoneLabel', label);
+    },
+    setLanguage: (code) => {
+      if (isValidPreference('dictationLanguage', code)) setPreference('dictationLanguage', code);
+    },
+  });
   app.on('second-instance', () => showHub());
   // Con el icono en el Dock, hacer clic en él abre el Hub.
   app.on('activate', () => showHub());
@@ -707,6 +726,7 @@ function main(): void {
       apiKeys,
       formatting,
       showHub,
+      describeTrayMenu,
       dataDir,
     };
   }

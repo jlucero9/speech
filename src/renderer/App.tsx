@@ -17,7 +17,7 @@ type Page = 'dictation' | 'dictionary' | 'style';
 
 /** Sección de ajustes de una página «settings…», o null si no es de ajustes. */
 function settingsSection(p: HubPage): SettingsSection | null {
-  if (p === 'settings') return 'general';
+  if (p === 'settings' || p === 'settings/shortcuts') return 'general';
   if (p === 'settings/system') return 'system';
   if (p === 'settings/engines') return 'engines';
   if (p === 'settings/data') return 'data';
@@ -30,6 +30,8 @@ export function App() {
   const [page, setPage] = useState<Page>(settingsSection(initialPage) ? 'dictation' : (initialPage as Page));
   const [settings, setSettings] = useState<SettingsSection | null>(settingsSection(initialPage));
   const [collapsed, setCollapsed] = useState(false);
+  // Cada petición de abrir los atajos cuenta: la misma dos veces vuelve a abrirlos.
+  const [shortcutsRequest, setShortcutsRequest] = useState(initialPage === 'settings/shortcuts' ? 1 : 0);
 
   // main pide una página al abrir el Hub desde la barra, la bandeja o un aviso.
   useEffect(
@@ -38,6 +40,7 @@ export function App() {
         if (!isHubPage(p)) return;
         const section = settingsSection(p);
         if (section) setSettings(section);
+        if (p === 'settings/shortcuts') setShortcutsRequest((n) => n + 1);
         else {
           setSettings(null);
           setPage(p as Page);
@@ -82,6 +85,7 @@ export function App() {
       {settings && (
         <SettingsDialog
           section={settings}
+          shortcutsRequest={shortcutsRequest}
           onSection={setSettings}
           onClose={() => setSettings(null)}
           onOpenStyle={() => {

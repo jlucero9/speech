@@ -31,11 +31,14 @@ type SubDialog = 'shortcuts' | 'microphone' | 'languages' | null;
 
 export function SettingsDialog({
   section,
+  shortcutsRequest,
   onSection,
   onClose,
   onOpenStyle,
 }: {
   section: SettingsSection;
+  /** Sube cada vez que main pide abrir el diálogo de los atajos. */
+  shortcutsRequest: number;
   onSection: (s: SettingsSection) => void;
   onClose: () => void;
   onOpenStyle: () => void;
@@ -43,6 +46,10 @@ export function SettingsDialog({
   const state = useSharedState();
   const [sub, setSub] = useState<SubDialog>(null);
   const body = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (shortcutsRequest > 0) setSub('shortcuts');
+  }, [shortcutsRequest]);
 
   useEffect(() => {
     const key = (e: KeyboardEvent) => {

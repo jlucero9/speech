@@ -729,14 +729,14 @@ export class Dictation {
     // Si no se llega a enviar el ⌘V, el resultado llega antes que la respuesta.
     let settled: PasteInfo | null = null;
     void job.outcome.then((o) => {
-      settled = this.pasted(s, sentAt, o);
+      settled = this.pasted(s, sentAt, o, text);
     });
     await job.posted;
     return { ...r, paste: settled ?? { result: 'pending', appName: target?.appName ?? null, ms: null } };
   }
 
   /** Resultado del pegado: completa la fila y, si se ve, el último dictado. */
-  private pasted(s: Session, sentAt: number, o: PasteOutcome): PasteInfo {
+  private pasted(s: Session, sentAt: number, o: PasteOutcome, text: string): PasteInfo {
     const released = s.stoppedAt ?? sentAt;
     const ms = o.requestedMs != null ? sentAt - released + o.requestedMs : null;
     const steps = [
@@ -759,8 +759,16 @@ export class Dictation {
     const info: PasteInfo = { result: o.result, appName: o.appName, ms };
     const last = this.state.last;
     if (last?.id === s.id) this.patch({ last: { ...last, paste: { ...info, appName: o.appName ?? last.paste?.appName ?? null } } });
-    if (isPasteFailure(o.result)) this.feedback.notify(notice.pasteFailed(s.id));
+    // Sin campo de texto, el aviso enseña lo dictado y deja copiarlo.
+    if (isPasteFailure(o.result)) {
+      this.feedback.notify(text.trim() ? notice.pasteFailedWithText(text.trim(), s.id) : notice.pasteFailed(s.id));
+    }
     return info;
+  }
+
+  /** El texto del último dictado (para enseñarlo en el menú del icono). */
+  lastTranscript(): string | null {
+    return this.lastText();
   }
 
   /** «Paste last transcript» del menú de la barra. */

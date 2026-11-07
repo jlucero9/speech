@@ -10,6 +10,19 @@ export function builtInMicrophone(devices: MicrophoneDevice[]): MicrophoneDevice
   return devices.find((d) => /built-in|macbook.*microphone|imac.*microphone/i.test(d.label)) ?? null;
 }
 
+/**
+ * Nombre corto de un micrófono, sin lo que repite macOS: «MacBook Air
+ * Microphone (Built-in)» → «MacBook Air», «Jose’s iPhone Microphone» →
+ * «Jose’s iPhone».
+ */
+export function microphoneName(label: string): string {
+  const short = label
+    .replace(/\s*\(built-in\)\s*$/i, '')
+    .replace(/\s+microphone$/i, '')
+    .trim();
+  return short || label;
+}
+
 export interface MicrophoneChoice {
   /** El id del micrófono; '' para «el del sistema». */
   key: string;
@@ -29,8 +42,8 @@ export function microphoneChoices(p: Prefs, m: Pick<MicrophonesState, 'devices' 
   const mac = builtInMicrophone(devices);
   const choices: MicrophoneChoice[] = [];
   if (mac) choices.push({ key: mac.id, device: mac, title: 'Built-in mic (recommended)' });
-  choices.push({ key: '', device: null, title: `Auto-detect${systemDefault ? ` (${systemDefault})` : ''}`, subtitle: 'From computer settings' });
-  for (const d of devices) if (d !== mac) choices.push({ key: d.id, device: d, title: d.label });
+  choices.push({ key: '', device: null, title: `Auto-detect${systemDefault ? ` (${microphoneName(systemDefault)})` : ''}`, subtitle: 'From computer settings' });
+  for (const d of devices) if (d !== mac) choices.push({ key: d.id, device: d, title: microphoneName(d.label) });
   const selected =
     choices.find((c) => c.device && (c.device.id === p.microphoneId || c.device.label === p.microphoneLabel)) ??
     (p.microphoneId ? null : choices.find((c) => c.key === ''));
@@ -38,7 +51,7 @@ export function microphoneChoices(p: Prefs, m: Pick<MicrophonesState, 'devices' 
     choices.push({
       key: p.microphoneId,
       device: { id: p.microphoneId, label: p.microphoneLabel },
-      title: p.microphoneLabel,
+      title: microphoneName(p.microphoneLabel),
       subtitle: 'Not connected. Dictation uses Auto-detect until it is back.',
     });
   }

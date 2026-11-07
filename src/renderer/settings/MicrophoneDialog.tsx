@@ -1,5 +1,10 @@
 import { useEffect, useState } from 'react';
-import { builtInMicrophone as builtIn, microphoneChoices, type MicrophoneChoice as Choice } from '../../shared/microphones';
+import {
+  builtInMicrophone as builtIn,
+  microphoneChoices,
+  microphoneName as shortName,
+  type MicrophoneChoice as Choice,
+} from '../../shared/microphones';
 import type { SharedState } from '../../shared/state';
 import { CloseIcon } from '../hub/icons';
 
@@ -12,9 +17,9 @@ import { CloseIcon } from '../hub/icons';
 export function microphoneName(state: SharedState): string {
   const p = state.prefs;
   const { devices, systemDefault } = state.microphones;
-  if (!p.microphoneId) return `Auto-detect${systemDefault ? ` (${systemDefault})` : ''}`;
+  if (!p.microphoneId) return `Auto-detect${systemDefault ? ` (${shortName(systemDefault)})` : ''}`;
   const connected = devices.some((d) => d.id === p.microphoneId || d.label === p.microphoneLabel);
-  const name = builtIn(devices)?.label === p.microphoneLabel ? 'Built-in mic (recommended)' : p.microphoneLabel;
+  const name = builtIn(devices)?.label === p.microphoneLabel ? 'Built-in mic (recommended)' : shortName(p.microphoneLabel);
   return connected ? name : `${name} (not connected, using Auto-detect)`;
 }
 
