@@ -12,8 +12,8 @@ export function builtInMicrophone(devices: MicrophoneDevice[]): MicrophoneDevice
 
 /**
  * Nombre corto de un micrófono, sin lo que repite macOS: «MacBook Air
- * Microphone (Built-in)» → «MacBook Air», «Jose’s iPhone Microphone» →
- * «Jose’s iPhone».
+ * Microphone (Built-in)» → «MacBook Air», «Ana’s iPhone Microphone» →
+ * «Ana’s iPhone».
  */
 export function microphoneName(label: string): string {
   const short = label

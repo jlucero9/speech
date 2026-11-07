@@ -34,7 +34,11 @@ if [[ ! -d "$FUENTE/.git" ]] || [[ "$(git -C "$FUENTE" rev-parse HEAD)" != "$WHI
 fi
 
 # La configuración avisa de detalles de ggml que no afectan; solo se muestra si falla.
-if ! salida=$(cmake -S "$RAIZ/transcriber" -B "$OBRA" -DCMAKE_BUILD_TYPE=Release -DWHISPER_SRC="$FUENTE" 2>&1); then
+# Las rutas de compilación que quedan dentro del binario (mensajes de error de
+# ggml) empiezan por «~», sin la carpeta del usuario.
+MAPA="-ffile-prefix-map=$HOME=~"
+if ! salida=$(cmake -S "$RAIZ/transcriber" -B "$OBRA" -DCMAKE_BUILD_TYPE=Release -DWHISPER_SRC="$FUENTE" \
+  -DCMAKE_C_FLAGS="$MAPA" -DCMAKE_CXX_FLAGS="$MAPA" -DCMAKE_OBJC_FLAGS="$MAPA" 2>&1); then
   echo "$salida" >&2
   exit 1
 fi

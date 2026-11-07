@@ -1,6 +1,8 @@
 #!/bin/zsh
 # Empaqueta Speech.app para abrirla sin terminal, en ~/Library/Developer/Speech/dist/.
 # Con --instalar, además la copia a /Applications (sustituyendo la anterior).
+# Con --dmg, además crea la imagen de disco para compartirla (Speech.app y un
+# acceso directo a Aplicaciones), en la misma carpeta.
 #
 # Lleva dentro el código compilado (out/, package.json y resources/), el helper
 # y el transcriptor tal como los firman sus scripts, y Electron con el nombre
@@ -11,7 +13,7 @@
 # ellos encendidos, cualquier programa podría ejecutar este binario como Node
 # (o abrirle un inspector) y leerlas como si fuera Speech.
 #
-# Uso: npm run empaquetar [-- --instalar]
+# Uso: npm run empaquetar [-- --instalar] [--dmg]
 set -euo pipefail
 
 RAIZ="${0:A:h:h}"
@@ -131,4 +133,19 @@ if [[ " $* " == *" --instalar "* ]]; then
   echo "Instalada: $INSTALADA"
 else
   echo "Lista: $DESTINO (npm run empaquetar -- --instalar la copia a /Applications)"
+fi
+
+if [[ " $* " == *" --dmg "* ]]; then
+  # Una sola arquitectura: el helper y el transcriptor se compilan para la del equipo.
+  ARQ=$(lipo -archs "$C/MacOS/$NOMBRE")
+  DMG="$COMPILACION/dist/$NOMBRE-$VERSION-${ARQ// /-}.dmg"
+  MONTAJE=$(mktemp -d)
+  chmod 755 "$MONTAJE"
+  ditto "$DESTINO" "$MONTAJE/$NOMBRE.app"
+  ln -s /Applications "$MONTAJE/Applications"
+  rm -f "$DMG"
+  hdiutil create -quiet -volname "$NOMBRE" -srcfolder "$MONTAJE" -fs APFS -format ULMO "$DMG"
+  rm -rf "$MONTAJE"
+  firmar "$DMG"
+  echo "Imagen: $DMG ($(du -h "$DMG" | cut -f1))"
 fi

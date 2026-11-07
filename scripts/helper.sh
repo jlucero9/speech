@@ -8,7 +8,10 @@ source "$RAIZ/scripts/firma/comun.sh"
 
 VERSION=$(node -p "require('$RAIZ/package.json').version")
 APP="$COMPILACION/helper/SpeechHelper.app"
-SWIFT=(swift build --package-path "$RAIZ/helper" --scratch-path "$COMPILACION/swift" -c release --arch arm64)
+# Las rutas de compilación que quedan dentro del binario empiezan por «~», sin
+# la carpeta del usuario: el binario se comparte en la app empaquetada.
+SWIFT=(swift build --package-path "$RAIZ/helper" --scratch-path "$COMPILACION/swift" -c release --arch arm64
+  -Xswiftc -file-prefix-map -Xswiftc "$HOME=~" -Xcc "-ffile-prefix-map=$HOME=~")
 
 "${SWIFT[@]}" 2>&1 | grep -vE '^(Building|Build complete|\[)' || true
 BIN="$("${SWIFT[@]}" --show-bin-path)/SpeechHelper"
@@ -17,6 +20,8 @@ BIN="$("${SWIFT[@]}" --show-bin-path)/SpeechHelper"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 cp "$BIN" "$APP/Contents/MacOS/SpeechHelper"
+# Sin símbolos de depuración: apuntan a los objetos intermedios, con su ruta.
+strip -S "$APP/Contents/MacOS/SpeechHelper"
 sed "s/__VERSION__/$VERSION/g" "$RAIZ/helper/Resources/Info.plist" > "$APP/Contents/Info.plist"
 
 desbloquear_llavero
