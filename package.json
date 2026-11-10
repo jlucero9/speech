@@ -3,6 +3,7 @@
   "productName": "Speech",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "description": "Dictation for macOS",
   "main": "out/main/index.js",
   "type": "commonjs",

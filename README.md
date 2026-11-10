@@ -52,4 +52,4 @@ npm run empaquetar -- --dmg   # Speech.app y el .dmg en ~/Library/Developer/Spee
 
 ## Licencia
 
-Sin licencia por ahora: el código se puede leer, pero no reutilizar. Las fuentes Figtree y EB Garamond (`src/renderer/assets/fonts/`) tienen licencia SIL Open Font License 1.1.
+[MIT](LICENSE). Las fuentes Figtree y EB Garamond (`src/renderer/assets/fonts/`) tienen licencia SIL Open Font License 1.1.
