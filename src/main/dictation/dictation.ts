@@ -357,6 +357,15 @@ export class Dictation {
       return;
     }
     const mic = this.permissions.refreshMicrophone();
+    if (mic === 'not-determined') {
+      // Primera vez: el diálogo del sistema en lugar del aviso. Concedido, el
+      // siguiente atajo ya graba; denegado, el aviso lleva a Ajustes.
+      void this.permissions.requestMicrophone().then((after) => {
+        log.info(`Microphone after asking: ${after}`);
+        if (after !== 'granted') this.feedback.notify(notice.microphonePermission());
+      });
+      return;
+    }
     if (mic !== 'granted') {
       this.fail('microphone_permission', 'Speech is not allowed to use the microphone.', notice.microphonePermission());
       return;

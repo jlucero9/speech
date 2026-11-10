@@ -37,11 +37,25 @@ export class Permissions {
     return status;
   }
 
-  async requestMicrophone(): Promise<void> {
-    log.info('Requesting microphone access');
-    await systemPreferences.askForMediaAccess('microphone');
-    this.refreshMicrophone();
+  /**
+   * Abre el diálogo del sistema. Solo aparece si nunca se ha pedido: macOS no
+   * pone la app en la lista de Privacidad › Micrófono hasta entonces, así que
+   * no hay nada que activar a mano. Varias llamadas seguidas comparten diálogo.
+   */
+  requestMicrophone(): Promise<MicrophonePermission> {
+    this.micRequest ??= (async () => {
+      log.info('Requesting microphone access');
+      try {
+        await systemPreferences.askForMediaAccess('microphone');
+      } finally {
+        this.micRequest = null;
+      }
+      return this.refreshMicrophone();
+    })();
+    return this.micRequest;
   }
+
+  private micRequest: Promise<MicrophonePermission> | null = null;
 
   async refreshAccessibility(): Promise<void> {
     try {
