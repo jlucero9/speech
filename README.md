@@ -24,7 +24,7 @@
 
 - **Fast.** Release the key and the text is already in your app: Mail, Slack, VS Code, the browser, anything.
 - **Clean text.** A small language model adds punctuation and capitals and removes the "um"s and "uh"s.
-- **Local or cloud.** Whisper runs on your Mac out of the box; switch to Groq or Gemini with your own API key.
+- **Cloud or local.** Groq for the best speed and quality, or Whisper on your Mac with no internet.
 - **Yours to tune.** A personal dictionary for names and jargon, a searchable history, and custom shortcuts.
 - **Free and open source,** under the MIT license.
 
@@ -36,9 +36,10 @@
 | <kbd>fn</kbd> + <kbd>Space</kbd> | Hands-free mode. Tap <kbd>fn</kbd> to finish. |
 | <kbd>Esc</kbd> | Cancel. |
 
-1. **Transcription:** Whisper Large v3 Turbo through [whisper.cpp](https://github.com/ggml-org/whisper.cpp), accelerated with Metal.
-2. **Cleanup:** [Ollama](https://ollama.com) with `qwen3:1.7b`, also on your Mac.
-3. **Optional cloud engines:** Groq or Gemini with your own API key. Off by default; keys are stored in the macOS Keychain.
+- **Recommended: Groq.** Add a free [Groq](https://console.groq.com/keys) API key in **Settings › Engines and Keys**, and both steps run there: transcription with Whisper Large v3 Turbo and cleanup with a language model. Fast and very accurate. Gemini works too.
+- **Offline: on your Mac.** Without a key, Speech transcribes on your Mac with Whisper Large v3 Turbo through [whisper.cpp](https://github.com/ggml-org/whisper.cpp), using the GPU. For offline cleanup, install [Ollama](https://ollama.com) (optional).
+
+Keys are stored in the macOS Keychain.
 
 ## Install
 
@@ -49,7 +50,7 @@
    - Open Speech, close the warning, then go to **System Settings › Privacy & Security** and click **Open Anyway**.
    - Or run `xattr -dr com.apple.quarantine /Applications/Speech.app` in Terminal.
 3. Grant the permissions it asks for: **Microphone**, to hear you, and **Accessibility**, to detect the shortcut and paste the text.
-4. Optional: install [Ollama](https://ollama.com) and run `ollama pull qwen3:1.7b` for punctuation and cleanup. Without it, Speech pastes the raw transcription and tells you so.
+4. Recommended: add your Groq API key in **Settings › Engines and Keys**. To stay fully offline instead, install [Ollama](https://ollama.com) and run `ollama pull qwen3:1.7b` for punctuation and cleanup; without either, Speech pastes the raw transcription and tells you so.
 
 > [!TIP]
 > If fn opens the emoji picker or switches the keyboard language, go to **System Settings › Keyboard** and set **Press 🌐 key to** **Do Nothing**.
