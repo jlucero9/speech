@@ -18,7 +18,9 @@
   <a href="#build-from-source">Build from source</a>
 </p>
 
-<!-- DEMO: the GIF goes here -->
+<p align="center">
+  <img src=".github/assets/demo.gif" alt="Dictating into Notes and Claude Code with Speech, then opening the history and the Groq usage" width="100%" />
+</p>
 
 ## Why Speech
 
