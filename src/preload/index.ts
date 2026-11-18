@@ -71,6 +71,7 @@ const api: SpeechApi = {
   removeApiKey: (provider) => ipcRenderer.invoke(IPC.removeApiKey, provider),
   allowApiKey: (provider) => ipcRenderer.invoke(IPC.allowApiKey, provider),
   testApiKey: (provider) => ipcRenderer.invoke(IPC.testApiKey, provider),
+  openGroqKeys: () => ipcRenderer.invoke(IPC.openGroqKeys),
 };
 
 contextBridge.exposeInMainWorld('speech', api);

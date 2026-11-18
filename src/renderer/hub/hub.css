@@ -47,7 +47,7 @@ button {
 }
 
 .sidebar-toggle:hover {
-  background: rgba(197, 192, 179, 0.2);
+  background: var(--hover-tint);
   color: var(--foreground);
 }
 
@@ -191,11 +191,11 @@ button {
   font: inherit;
   font-size: 25px;
   font-weight: 550;
-  color: var(--foreground);
-  background: var(--glow-300);
-  border: 1.5px solid var(--foreground);
+  color: var(--key-ink);
+  background: var(--key-bg);
+  border: 1.5px solid var(--key-ink);
   border-radius: 6px;
-  box-shadow: -0.8px 0.8px 0 0 var(--foreground);
+  box-shadow: -0.8px 0.8px 0 0 var(--key-shadow);
 }
 
 .dictation-columns {
@@ -521,7 +521,7 @@ button {
 
 .icon-button:hover:not(:disabled),
 .icon-button-active {
-  background: rgba(197, 192, 179, 0.3);
+  background: var(--hover-tint-strong);
 }
 
 .icon-button:disabled {
@@ -543,8 +543,8 @@ button {
   z-index: 900;
   padding: 12px;
   border-radius: 8px;
-  background: var(--vast-950);
-  color: var(--sand-600);
+  background: var(--inverse-bg);
+  color: var(--tooltip-fg);
   font-size: 12px;
   line-height: 20px;
   font-weight: 500;
@@ -575,8 +575,8 @@ button {
   border-radius: 10px;
   background: var(--background);
   box-shadow:
-    0 10px 15px -3px rgba(26, 26, 26, 0.1),
-    0 4px 6px -4px rgba(26, 26, 26, 0.1);
+    0 10px 15px -3px var(--shadow),
+    0 4px 6px -4px var(--shadow);
 }
 
 .menu-item {
@@ -615,7 +615,7 @@ button {
   z-index: 700;
   display: grid;
   place-items: center;
-  background: rgba(26, 26, 26, 0.3);
+  background: var(--backdrop);
   animation: fade-in 150ms ease;
 }
 
@@ -624,8 +624,8 @@ button {
   border: 1px solid var(--border);
   border-radius: 12px;
   box-shadow:
-    0 20px 25px -5px rgba(26, 26, 26, 0.1),
-    0 8px 10px -6px rgba(26, 26, 26, 0.1);
+    0 20px 25px -5px var(--shadow),
+    0 8px 10px -6px var(--shadow);
 }
 
 .modal-title {
@@ -701,13 +701,13 @@ button {
   z-index: 1000;
   width: 300px;
   padding: 8px 12px;
-  border: 1px solid var(--vast-900);
+  border: 1px solid var(--inverse-border);
   border-radius: 6px;
-  background: var(--vast-950);
-  color: #fff;
+  background: var(--inverse-bg);
+  color: var(--inverse-fg);
   box-shadow:
-    0 10px 15px -3px rgba(26, 26, 26, 0.1),
-    0 4px 6px -4px rgba(26, 26, 26, 0.1);
+    0 10px 15px -3px var(--shadow),
+    0 4px 6px -4px var(--shadow);
   animation: toast-in 150ms ease;
 }
 
@@ -734,7 +734,7 @@ button {
   padding: 0;
   border: none;
   background: none;
-  color: #fff;
+  color: var(--inverse-fg);
   font-weight: 600;
   text-decoration: underline;
   text-underline-offset: 2px;
@@ -1056,8 +1056,8 @@ button {
   width: 260px;
   padding: 12px;
   border-radius: 8px;
-  background: var(--vast-950);
-  color: var(--sand-600);
+  background: var(--inverse-bg);
+  color: var(--tooltip-fg);
   font-size: 12px;
   line-height: 20px;
   font-weight: 500;
@@ -1124,4 +1124,49 @@ button {
 
 .import-preview .muted-row {
   color: var(--foreground-tertiary);
+}
+
+/* MARK: Uso de Groq */
+
+.usage-ring {
+  flex: none;
+}
+
+.usage-ring-track {
+  stroke: var(--border);
+}
+
+.usage-ring-fill {
+  stroke: var(--foreground);
+  transition: stroke-dashoffset 400ms ease;
+}
+
+.usage-ring-warn .usage-ring-fill {
+  stroke: var(--warning-fg);
+}
+
+.usage-ring-full .usage-ring-fill {
+  stroke: var(--error-fg);
+}
+
+.nav-usage {
+  font-weight: 450;
+  color: var(--foreground-tertiary);
+}
+
+.nav-usage .nav-label {
+  flex: 1;
+}
+
+.nav-usage-percent {
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+}
+
+.hub-collapsed .nav-usage-percent {
+  display: none;
+}
+
+.nav-usage svg {
+  margin: 1px;
 }

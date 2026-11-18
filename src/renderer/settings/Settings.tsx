@@ -157,6 +157,17 @@ function SystemPage({ state, onOpenStyle }: { state: SharedState; onOpenStyle: (
     <>
       <PageTitle>System</PageTitle>
       <Section title="App settings">
+        <SettingRow label="Appearance" description="Choose between a dark and a light display.">
+          <Select
+            label="Appearance"
+            value={p.appearance}
+            options={[
+              ['dark', 'Dark'],
+              ['light', 'Light'],
+            ]}
+            onChange={(v) => void set('appearance', v)}
+          />
+        </SettingRow>
         <SettingRow label="Launch app at login">
           <Switch label="Launch app at login" checked={p.launchAtLogin} onChange={(v) => void set('launchAtLogin', v)} />
         </SettingRow>

@@ -1,4 +1,4 @@
-/* Tokens de diseño (tema claro) y piezas comunes: insignia, interruptor y medidor. */
+/* Tokens de diseño (temas claro y oscuro) y piezas comunes: insignia, interruptor y medidor. */
 
 @font-face {
   font-family: 'Figtree';
@@ -46,6 +46,65 @@
   --warning-fg: #b45309;
   --error-bg: #fee2e2;
   --error-fg: #bc3d3d;
+
+  /* Piezas que no siguen la inversión de la paleta. */
+  --lumen-100: #fffffb;
+  --switch-on: var(--primary);
+  --switch-thumb: #ffffff;
+  --inverse-bg: var(--vast-950);
+  --inverse-border: var(--vast-900);
+  --inverse-fg: #ffffff;
+  --tooltip-fg: var(--sand-600);
+  --key-ink: #1a1a1a;
+  --key-bg: var(--glow-300);
+  --key-shadow: var(--vast-950);
+  --backdrop: rgba(26, 26, 26, 0.3);
+  --shadow: rgba(26, 26, 26, 0.1);
+  --hover-tint: rgba(197, 192, 179, 0.2);
+  --hover-tint-strong: rgba(197, 192, 179, 0.3);
+
+  color-scheme: light;
+}
+
+/* Tema oscuro: el tema lo fija main (nativeTheme), y llega aquí como
+   prefers-color-scheme. Se redefine la paleta para que cada regla que usa un
+   tono claro o uno oscuro siga funcionando con los papeles invertidos. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --sand-50: #1f1e1c;
+    --sand-500: #161615;
+    --sand-600: #2e2d2a;
+    --sand-700: #4a4843;
+    --sand-950: #c5c0b3;
+    --vast-300: #5a5955;
+    --vast-600: #9d9b95;
+    --vast-900: #c9c7c1;
+    --vast-950: #f2f1ed;
+    --destructive-700: #f08a8a;
+    --shade-white: #262523;
+
+    --success-bg: #1d3a28;
+    --success-fg: #6cc98d;
+    --warning-bg: #3d2f12;
+    --warning-fg: #f2b45a;
+    --error-bg: #42201f;
+    --error-fg: #f08a8a;
+
+    --lumen-100: #22211e;
+    --switch-on: #3f9a5f;
+    --inverse-bg: #2e2d2a;
+    --inverse-border: #4a4843;
+    --tooltip-fg: #f2f1ed;
+    /* La tecla del saludo, en lavanda: el naranja desentona sobre fondo oscuro. */
+    --key-bg: #c9a6e3;
+    --key-shadow: #c9a6e3;
+    --backdrop: rgba(0, 0, 0, 0.55);
+    --shadow: rgba(0, 0, 0, 0.4);
+    --hover-tint: rgba(255, 255, 255, 0.06);
+    --hover-tint-strong: rgba(255, 255, 255, 0.1);
+
+    color-scheme: dark;
+  }
 }
 
 * {
@@ -121,7 +180,7 @@ html {
 }
 
 .switch-on {
-  background: var(--primary);
+  background: var(--switch-on);
 }
 
 .switch-thumb {
@@ -129,7 +188,7 @@ html {
   width: 21px;
   height: 21px;
   border-radius: 50%;
-  background: #fff;
+  background: var(--switch-thumb);
   transition: transform 150ms ease;
 }
 

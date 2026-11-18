@@ -46,6 +46,7 @@ export const IPC = {
   removeApiKey: 'keys:remove',
   allowApiKey: 'keys:allow',
   testApiKey: 'keys:test',
+  openGroqKeys: 'keys:open-groq',
 } as const;
 
 /** main → Hub. */
@@ -225,4 +226,6 @@ export interface SpeechApi {
   allowApiKey(provider: CloudProvider): Promise<ApiKeyResult>;
   /** Comprueba la clave con el proveedor. */
   testApiKey(provider: CloudProvider): Promise<ApiKeyResult>;
+  /** Abre en el navegador la página de Groq donde se crean las claves. */
+  openGroqKeys(): Promise<void>;
 }

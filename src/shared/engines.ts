@@ -37,3 +37,22 @@ export type ApiKeyResult = { ok: true } | { ok: false; message: string };
 export function isPlausibleApiKey(value: unknown): value is string {
   return typeof value === 'string' && value.length >= 16 && value.length <= 512 && /^[\x21-\x7e]+$/.test(value);
 }
+
+/**
+ * Límites diarios del plan gratuito de Groq para los dos modelos que usa la
+ * app. Si Groq dice otro tope de peticiones en sus cabeceras, manda el suyo;
+ * los de tokens y segundos de audio no los dice en ningún sitio.
+ */
+export const GROQ_DAILY_LIMITS = {
+  transcription: { requests: 2_000, audioSeconds: 28_800 },
+  formatting: { requests: 1_000, tokens: 200_000 },
+} as const;
+
+/**
+ * Uso de Groq en las últimas 24 horas, de 0 a 100: el del límite que esté más
+ * cerca de agotarse. limitedUntil: Groq contestó que se llegó al límite y no
+ * vuelve a aceptar hasta esa hora (ms), o null.
+ */
+export interface CloudUsageState {
+  groq: { percent: number; limitedUntil: number | null; updatedAt: number | null };
+}

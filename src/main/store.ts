@@ -92,6 +92,7 @@ export function initialState(version = '0.0.0'): SharedState {
       detail: null,
     },
     apiKeys: { groq: 'unknown', gemini: 'unknown' },
+    cloudUsage: { groq: { percent: 0, limitedUntil: null, updatedAt: null } },
     bar: { notice: null },
     microphones: { devices: [], systemDefault: null, lastUsed: null },
     data: { databaseReady: false, schemaVersion: 0, migrationsAppliedThisLaunch: 0, error: null },

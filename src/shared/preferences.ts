@@ -42,6 +42,14 @@ export interface Preferences {
   contextAwareness: boolean;
   /** Qué se guarda del historial: todo, solo 24 horas o nada. */
   historyStorage: HistoryStorage;
+  /** Tema de la interfaz: oscuro (por defecto) o claro. */
+  appearance: Appearance;
+}
+
+export type Appearance = 'dark' | 'light';
+
+export function isAppearance(value: unknown): value is Appearance {
+  return value === 'dark' || value === 'light';
 }
 
 export type HistoryStorage = 'store' | 'autodelete' | 'never';
@@ -67,6 +75,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   showInDock: false,
   contextAwareness: true,
   historyStorage: 'store',
+  appearance: 'dark',
 };
 
 /** Validación más estricta que el tipo, para las que tienen valores cerrados. */
@@ -80,6 +89,7 @@ const VALIDATORS: { [K in keyof Preferences]?: (value: unknown) => boolean } = {
   microphoneId: (v) => (v as string).length <= 512,
   microphoneLabel: (v) => (v as string).length <= 512,
   historyStorage: isHistoryStorage,
+  appearance: isAppearance,
 };
 
 /** Comprueba que el valor tiene el mismo tipo que el de por defecto (y, si lo hay, pasa su validación). */

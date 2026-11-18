@@ -1,4 +1,5 @@
 import { isCloudProvider, TRANSCRIPTION_MODELS, type CloudProvider } from '../../shared/engines';
+import type { GroqUsage } from '../cloud-usage';
 import type { ReadApiKey } from '../keys';
 import type { Store } from '../store';
 import { GeminiTranscription, GroqTranscription } from './cloud';
@@ -13,9 +14,10 @@ export class TranscriptionEngines implements TranscriptionEngine {
     private readonly store: Store,
     private readonly local: TranscriptionEngine,
     readKey: ReadApiKey,
+    groqUsage?: GroqUsage,
   ) {
     this.cloud = {
-      groq: new GroqTranscription(TRANSCRIPTION_MODELS.groq, readKey),
+      groq: new GroqTranscription(TRANSCRIPTION_MODELS.groq, readKey, groqUsage),
       gemini: new GeminiTranscription(TRANSCRIPTION_MODELS.gemini, readKey),
     };
     let last = store.get().prefs.transcriptionEngine;

@@ -1,4 +1,4 @@
-import { app, clipboard, dialog, ipcMain, powerMonitor, shell } from 'electron';
+import { app, clipboard, dialog, ipcMain, nativeTheme, powerMonitor, shell } from 'electron';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { copyFile, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -35,6 +35,7 @@ import { RecorderWindow } from './recorder-window';
 import { initialState, Store } from './store';
 import { TextFormatting } from './formatting/service';
 import { TranscriptionEngines } from './transcription/engines';
+import { GroqUsage } from './cloud-usage';
 import { LocalWhisper } from './transcription/local-whisper';
 import { ModelManager } from './transcription/models';
 import { createTray, describeTrayMenu, setTrayStatus, setTrayWarning } from './tray';
@@ -74,6 +75,12 @@ function main(): void {
   const prefsPath = join(dataDir, 'preferences.json');
   const prefs = loadPreferences(prefsPath);
   store.update((s) => ({ ...s, prefs }));
+  // El tema se fija en Electron: así las ventanas lo reciben como
+  // prefers-color-scheme desde el primer pintado, sin parpadeo.
+  nativeTheme.themeSource = prefs.appearance;
+  store.subscribe((s) => {
+    if (nativeTheme.themeSource !== s.prefs.appearance) nativeTheme.themeSource = s.prefs.appearance;
+  });
   const setPreference = <K extends keyof Preferences>(key: K, value: Preferences[K]): void => {
     const next = { ...store.get().prefs, [key]: value };
     savePreferences(prefsPath, next);
@@ -181,7 +188,8 @@ function main(): void {
   // Las claves de la nube: al arrancar solo se mira si están, sin leerlas.
   const apiKeys = new ApiKeys(store);
   void apiKeys.refresh();
-  const engine = new TranscriptionEngines(store, new LocalWhisper(store, models, transcriberExecutable()), apiKeys.read);
+  const groqUsage = new GroqUsage(store, join(dataDir, 'groq-usage.json'));
+  const engine = new TranscriptionEngines(store, new LocalWhisper(store, models, transcriberExecutable()), apiKeys.read, groqUsage);
   models.start();
   // El modelo se avisa en la bandeja mientras se descarga.
   store.subscribe((s) => setTrayStatus(modelTrayText(s.transcription.model)));
@@ -212,7 +220,7 @@ function main(): void {
   const voiceLevels = new VoiceLevels(join(dataDir, 'voice-levels.json'));
   const paster = new Paster(helper);
   // Formateo: Ollama en el equipo por defecto; si no responde, se pega la transcripción.
-  const formatting = new TextFormatting(store, apiKeys.read);
+  const formatting = new TextFormatting(store, apiKeys.read, groqUsage);
   void formatting.check();
 
   // Barra flotante: siempre viva; sus avisos y sonidos los decide main.
@@ -681,7 +689,21 @@ function main(): void {
     if (!isCloudProvider(v)) throw new Error('Unknown provider');
     return v;
   };
-  ipcMain.handle(IPC.saveApiKey, (_e, provider: unknown, key: unknown) => apiKeys.save(toProvider(provider), String(key ?? '')));
+  ipcMain.handle(IPC.saveApiKey, async (_e, provider: unknown, key: unknown) => {
+    const p = toProvider(provider);
+    const hadKey = store.get().apiKeys[p] === 'saved' || store.get().apiKeys[p] === 'locked';
+    const r = await apiKeys.save(p, String(key ?? ''));
+    // Con la primera clave de Groq, Groq pasa a hacer todo el trabajo: es mucho
+    // más rápido que el equipo. Solo si nadie había elegido otra cosa.
+    const prefs = store.get().prefs;
+    if (r.ok && p === 'groq' && !hadKey && prefs.transcriptionEngine === 'local' && prefs.formattingProvider === 'ollama') {
+      setPreference('transcriptionEngine', 'groq');
+      setPreference('formattingProvider', 'groq');
+      log.info('First Groq key saved: transcription and cleanup switched to Groq');
+    }
+    return r;
+  });
+  ipcMain.handle(IPC.openGroqKeys, () => shell.openExternal('https://console.groq.com/keys'));
   ipcMain.handle(IPC.removeApiKey, async (_e, provider: unknown) => {
     const p = toProvider(provider);
     const r = await apiKeys.remove(p);
@@ -696,6 +718,7 @@ function main(): void {
 
   app.on('before-quit', () => {
     log.info('Quitting');
+    groqUsage.save();
     helper.stop();
     recorder.shutdown();
     bar.shutdown();

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, screen } from 'electron';
+import { app, BrowserWindow, nativeTheme, screen } from 'electron';
 import { join } from 'node:path';
 import { HUB_EVENTS, type HubPage } from '../shared/ipc';
 
@@ -11,6 +11,15 @@ const MIN_WIDTH = 1140;
 const MIN_HEIGHT = 750;
 
 let hub: BrowserWindow | null = null;
+
+/** Fondo de la ventana mientras carga; el mismo que pinta la página en cada tema. */
+function windowBackground(): string {
+  return nativeTheme.shouldUseDarkColors ? '#161615' : '#f5f4f0';
+}
+
+nativeTheme.on('updated', () => {
+  if (hub && !hub.isDestroyed()) hub.setBackgroundColor(windowBackground());
+});
 
 export function openHub(page: HubPage, onFocus: () => void): BrowserWindow {
   if (hub && !hub.isDestroyed()) {
@@ -33,7 +42,7 @@ export function openHub(page: HubPage, onFocus: () => void): BrowserWindow {
     minHeight: Math.min(MIN_HEIGHT, height),
     show: false,
     title: 'Speech',
-    backgroundColor: '#f5f4f0',
+    backgroundColor: windowBackground(),
     titleBarStyle: 'hidden',
     trafficLightPosition: { x: 16, y: 19 },
     webPreferences: {

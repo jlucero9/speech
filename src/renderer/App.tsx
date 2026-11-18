@@ -7,6 +7,7 @@ import { HistoryList } from './hub/History';
 import { BookIcon, GearIcon, LogoMark, MicIcon, SidebarIcon, TypeIcon } from './hub/icons';
 import { StylePage } from './hub/Style';
 import { ToastProvider } from './hub/ui';
+import { groqUsageText, UsageRing, usesGroq } from './hub/UsageRing';
 import { SettingsDialog, type SettingsSection } from './settings/Settings';
 import { useSharedState } from './useSharedState';
 
@@ -32,6 +33,7 @@ export function App() {
   const [collapsed, setCollapsed] = useState(false);
   // Cada petición de abrir los atajos cuenta: la misma dos veces vuelve a abrirlos.
   const [shortcutsRequest, setShortcutsRequest] = useState(initialPage === 'settings/shortcuts' ? 1 : 0);
+  const state = useSharedState();
 
   // main pide una página al abrir el Hub desde la barra, la bandeja o un aviso.
   useEffect(
@@ -74,6 +76,15 @@ export function App() {
           </ul>
           <div className="nav-bottom">
             <ul className="nav">
+              {state && usesGroq(state) && (
+                <li>
+                  <button type="button" className="nav-item nav-usage" title={groqUsageText(state)} onClick={() => setSettings('engines')}>
+                    <UsageRing percent={state.cloudUsage.groq.percent} />
+                    <span className="nav-label">Groq usage</span>
+                    <span className="nav-label nav-usage-percent">{state.cloudUsage.groq.percent}%</span>
+                  </button>
+                </li>
+              )}
               <NavItem icon={<GearIcon />} label="Settings" active={settings !== null} onClick={() => setSettings('general')} />
             </ul>
           </div>

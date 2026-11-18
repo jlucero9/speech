@@ -2,6 +2,7 @@ import { FORMATTING_MODELS, type FormattingProvider, type FormattingState } from
 import type { ReadApiKey } from '../keys';
 import { logger } from '../log';
 import type { Store } from '../store';
+import type { GroqUsage } from '../cloud-usage';
 import { GeminiFormatter, GroqFormatter } from './cloud';
 import { FormatError, type FormatRequest, type FormatResult, type Formatter } from './formatter';
 import { OLLAMA_URL, OllamaFormatter } from './ollama';
@@ -37,6 +38,7 @@ export class TextFormatting {
   constructor(
     private readonly store: Store,
     private readonly readKey: ReadApiKey,
+    private readonly groqUsage?: GroqUsage,
   ) {
     let prefs = store.get().prefs;
     let keys = store.get().apiKeys;
@@ -62,7 +64,7 @@ export class TextFormatting {
 
   private current(): Formatter {
     const provider = this.store.get().prefs.formattingProvider;
-    if (this.formatter?.provider !== provider) this.formatter = create(provider, this.readKey);
+    if (this.formatter?.provider !== provider) this.formatter = create(provider, this.readKey, this.groqUsage);
     return this.formatter;
   }
 
@@ -162,13 +164,13 @@ export class TextFormatting {
   }
 }
 
-function create(provider: FormattingProvider, readKey: ReadApiKey): Formatter {
+function create(provider: FormattingProvider, readKey: ReadApiKey, groqUsage?: GroqUsage): Formatter {
   const model = FORMATTING_MODELS[provider];
   switch (provider) {
     case 'ollama':
       return new OllamaFormatter({ model, keepAlive: OLLAMA_KEEP_ALIVE });
     case 'groq':
-      return new GroqFormatter(model, readKey);
+      return new GroqFormatter(model, readKey, groqUsage);
     case 'gemini':
       return new GeminiFormatter(model, readKey);
   }

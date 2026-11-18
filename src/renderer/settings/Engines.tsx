@@ -3,7 +3,8 @@ import { CLOUD_PROVIDER_NAMES, CLOUD_PROVIDERS, TRANSCRIPTION_MODELS, type ApiKe
 import { FORMATTING_MODELS, type FormattingProvider } from '../../shared/formatting';
 import type { SharedState } from '../../shared/state';
 import { LOCAL_MODELS } from '../../shared/transcription';
-import { useToast } from '../hub/ui';
+import { ConfirmDialog, useToast } from '../hub/ui';
+import { groqUsageText, UsageRing } from '../hub/UsageRing';
 import { Badge, Section, Select, SettingRow } from './controls';
 
 // Ajustes › Engines and Keys: quién transcribe, quién limpia, las claves (en el
@@ -30,6 +31,7 @@ export function EnginesPage({ state, onOpenStyle }: { state: SharedState; onOpen
   return (
     <>
       <h1 className="settings-title">Engines and Keys</h1>
+      {!hasKey('groq') && state.apiKeys.groq !== 'locked' && <GroqSetup />}
       <Section title="Who does the work">
         <SettingRow
           label="Transcribe with"
@@ -79,6 +81,16 @@ export function EnginesPage({ state, onOpenStyle }: { state: SharedState; onOpen
           />
         </SettingRow>
       </Section>
+      {hasKey('groq') && (
+        <Section title="Groq usage">
+          <SettingRow
+            label={state.cloudUsage.groq.limitedUntil ? 'Limit reached' : `${state.cloudUsage.groq.percent}% used in the last 24 hours`}
+            description={`${state.cloudUsage.groq.limitedUntil ? `${groqUsageText(state)} ` : ''}Groq's free plan has a daily allowance; what you used a day ago frees up as time passes. At 100%, Groq stops accepting dictations for a while and they stay in your history to retry.`}
+          >
+            <UsageRing percent={state.cloudUsage.groq.percent} size={32} stroke={4} />
+          </SettingRow>
+        </Section>
+      )}
       <Section title="API keys">
         {CLOUD_PROVIDERS.map((c) => (
           <KeyRow key={c} provider={c} state={state} />
@@ -105,6 +117,33 @@ export function EnginesPage({ state, onOpenStyle }: { state: SharedState; onOpen
   );
 }
 
+/** Los pasos para conseguir una clave de Groq: gratis, en un par de minutos. */
+function GroqSetup() {
+  return (
+    <Section title="Make dictation instant with Groq">
+      <div className="groq-setup">
+        <p className="groq-setup-lead">
+          Groq transcribes and cleans up your dictation in about a second, instead of several on this Mac. It's free and takes about two minutes.
+        </p>
+        <ol className="groq-setup-steps">
+          <li>
+            <button type="button" className="inline-link" onClick={() => void window.speech.openGroqKeys()}>
+              Open console.groq.com/keys
+            </button>{' '}
+            and sign in with Google, GitHub or your email.
+          </li>
+          <li>
+            Click <strong>Create API Key</strong>, give it any name and copy the key. It starts with <code>gsk_</code>.
+          </li>
+          <li>
+            Click <strong>Add</strong> next to Groq below and paste it. Speech switches to Groq right away.
+          </li>
+        </ol>
+      </div>
+    </Section>
+  );
+}
+
 function Disclosure({ label, children }: { label: string; children: ReactNode }) {
   return <SettingRow label={label} description={children} />;
 }
@@ -116,6 +155,7 @@ function KeyRow({ provider, state }: { provider: CloudProvider; state: SharedSta
   const [value, setValue] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
   const toast = useToast();
   const run = async (action: () => Promise<ApiKeyResult>, done: string | null): Promise<boolean> => {
     setBusy(true);
@@ -129,7 +169,9 @@ function KeyRow({ provider, state }: { provider: CloudProvider; state: SharedSta
     return false;
   };
   const save = async () => {
-    if (await run(() => window.speech.saveApiKey(provider, value), `${name} key saved`)) {
+    const p = state.prefs;
+    const switches = provider === 'groq' && status !== 'saved' && status !== 'locked' && p.transcriptionEngine === 'local' && p.formattingProvider === 'ollama';
+    if (await run(() => window.speech.saveApiKey(provider, value), switches ? 'Groq key saved. Speech now uses Groq.' : `${name} key saved`)) {
       setValue('');
       setEditing(false);
     }
@@ -155,9 +197,21 @@ function KeyRow({ provider, state }: { provider: CloudProvider; state: SharedSta
           {status === 'missing' || status === 'unknown' ? 'Add' : 'Replace'}
         </button>
         {(status === 'saved' || status === 'locked') && (
-          <button type="button" className="hub-button hub-button-secondary" disabled={busy} onClick={() => void run(() => window.speech.removeApiKey(provider), `${name} key removed`)}>
+          <button type="button" className="hub-button hub-button-secondary" disabled={busy} onClick={() => setConfirmRemove(true)}>
             Remove
           </button>
+        )}
+        {confirmRemove && (
+          <ConfirmDialog
+            title={`Remove your ${name} key?`}
+            body={`Speech can't show your key, so you'd have to paste it again or create a new one in ${name}. Anything using ${name} goes back to running on this Mac.`}
+            confirm="Remove"
+            onCancel={() => setConfirmRemove(false)}
+            onConfirm={() => {
+              setConfirmRemove(false);
+              void run(() => window.speech.removeApiKey(provider), `${name} key removed`);
+            }}
+          />
         )}
       </SettingRow>
       {editing && (

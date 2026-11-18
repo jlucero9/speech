@@ -1,5 +1,6 @@
 import { FormatError, type FormatErrorCode, type FormatRequest, type FormatResult, type Formatter } from './formatter';
 import type { CloudProvider } from '../../shared/engines';
+import type { GroqUsage } from '../cloud-usage';
 import { ApiKeyError, type ReadApiKey } from '../keys';
 import { abortError } from './ollama';
 import { buildMessages, checkFidelity, cleanOutput, maxOutputTokens, type ChatMessage } from './prompt';
@@ -38,6 +39,7 @@ abstract class CloudFormatter implements Formatter {
       throw new FormatError('network', `${this.provider}: ${(err as Error).message}`);
     }
     const body = (await res.json().catch(() => ({}))) as unknown;
+    this.received(res, body);
     if (!res.ok) throw new FormatError(errorCode(res.status), `${this.provider} ${res.status}: ${errorMessage(body)}`);
     const text = cleanOutput(this.extract(body));
     const rejected = checkFidelity(req.text, text, req.vocabulary);
@@ -45,12 +47,28 @@ abstract class CloudFormatter implements Formatter {
     return { text, provider: this.provider, model: this.model, ms: Math.round(performance.now() - t0) };
   }
 
+  /** Cada respuesta del proveedor, para quien lleve la cuenta del uso. */
+  protected received(_res: Response, _body: unknown): void {}
+
   protected abstract request(key: string, messages: ChatMessage[], maxTokens: number, signal?: AbortSignal): Promise<Response>;
   protected abstract extract(body: unknown): string;
 }
 
 export class GroqFormatter extends CloudFormatter {
   readonly provider = 'groq';
+
+  constructor(
+    model: string,
+    readKey: ReadApiKey,
+    private readonly usage?: GroqUsage,
+  ) {
+    super(model, readKey);
+  }
+
+  protected received(res: Response, body: unknown): void {
+    if (res.ok) this.usage?.recordFormatting(res, body);
+    else if (res.status === 429) this.usage?.recordLimited(res);
+  }
 
   protected request(key: string, messages: ChatMessage[], maxTokens: number, signal?: AbortSignal): Promise<Response> {
     // gpt-oss siempre razona (como mínimo, «low»); en Qwen se puede apagar.

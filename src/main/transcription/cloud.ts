@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { CLOUD_PROVIDER_NAMES, type CloudProvider } from '../../shared/engines';
 import { DICTATION_LANGUAGES } from '../../shared/transcription';
+import type { GroqUsage } from '../cloud-usage';
 import { ApiKeyError, type ReadApiKey } from '../keys';
 import { logger } from '../log';
 import { TranscriptionError, type TranscriptionEngine, type TranscriptionRequest, type TranscriptionResult } from './engine';
@@ -79,6 +80,14 @@ abstract class CloudTranscription implements TranscriptionEngine {
 export class GroqTranscription extends CloudTranscription {
   readonly id = 'groq';
 
+  constructor(
+    model: string,
+    readKey: ReadApiKey,
+    private readonly usage?: GroqUsage,
+  ) {
+    super(model, readKey);
+  }
+
   protected async send(key: string, wav: Buffer, req: TranscriptionRequest, signal: AbortSignal): Promise<string> {
     const form = new FormData();
     form.set('file', new Blob([new Uint8Array(wav)], { type: 'audio/wav' }), 'dictation.wav');
@@ -94,6 +103,8 @@ export class GroqTranscription extends CloudTranscription {
       body: form,
       signal,
     });
+    if (res.ok) this.usage?.recordTranscription(res, req.durationMs);
+    else if (res.status === 429) this.usage?.recordLimited(res);
     return ((await this.json(res)) as { text?: string }).text ?? '';
   }
 }
